@@ -75,4 +75,8 @@ public:
     // Save the bundle 
     UFUNCTION(BlueprintCallable, Category = "Bundle")
     bool Save();
+    
+    // Debug function to print the bundle's contents
+    UFUNCTION(BlueprintCallable, Category = "Bundle")
+    void DebugPrintContents(const FString& Context = TEXT("")) const;
 }; 

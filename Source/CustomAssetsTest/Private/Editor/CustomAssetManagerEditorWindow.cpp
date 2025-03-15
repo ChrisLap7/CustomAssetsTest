@@ -37,6 +37,12 @@ FString GetEnumValueString(const ECharacterClass CharClass);
 
 #define LOCTEXT_NAMESPACE "CustomAssetManager"
 
+// Define static tab ID constants
+static const FName TAB_ID_ASSETS = TEXT("Assets");
+static const FName TAB_ID_BUNDLES = TEXT("Bundles");
+static const FName TAB_ID_MEMORY = TEXT("Memory");
+static const FName TAB_ID_DEPENDENCIES = TEXT("Dependencies");
+
 // Window creation
 void SCustomAssetManagerEditorWindow::OpenWindow()
 {
@@ -54,6 +60,41 @@ void SCustomAssetManagerEditorWindow::OpenWindow()
     FSlateApplication::Get().AddWindow(Window);
     
     UE_LOG(LogTemp, Display, TEXT("Custom Asset Manager Window opened"));
+}
+
+SCustomAssetManagerEditorWindow::SCustomAssetManagerEditorWindow()
+{
+    UE_LOG(LogTemp, Display, TEXT("Creating Custom Asset Manager Window"));
+}
+
+SCustomAssetManagerEditorWindow::~SCustomAssetManagerEditorWindow()
+{
+    UE_LOG(LogTemp, Display, TEXT("Destroying Custom Asset Manager Window"));
+    
+    // Make sure to unregister all tab spawners when the window is destroyed
+    if (FGlobalTabmanager::Get()->HasTabSpawner(TAB_ID_ASSETS))
+    {
+        FGlobalTabmanager::Get()->UnregisterTabSpawner(TAB_ID_ASSETS);
+        UE_LOG(LogTemp, Display, TEXT("Unregistered Assets tab spawner in destructor"));
+    }
+    
+    if (FGlobalTabmanager::Get()->HasTabSpawner(TAB_ID_BUNDLES))
+    {
+        FGlobalTabmanager::Get()->UnregisterTabSpawner(TAB_ID_BUNDLES);
+        UE_LOG(LogTemp, Display, TEXT("Unregistered Bundles tab spawner in destructor"));
+    }
+    
+    if (FGlobalTabmanager::Get()->HasTabSpawner(TAB_ID_MEMORY))
+    {
+        FGlobalTabmanager::Get()->UnregisterTabSpawner(TAB_ID_MEMORY);
+        UE_LOG(LogTemp, Display, TEXT("Unregistered Memory tab spawner in destructor"));
+    }
+    
+    if (FGlobalTabmanager::Get()->HasTabSpawner(TAB_ID_DEPENDENCIES))
+    {
+        FGlobalTabmanager::Get()->UnregisterTabSpawner(TAB_ID_DEPENDENCIES);
+        UE_LOG(LogTemp, Display, TEXT("Unregistered Dependencies tab spawner in destructor"));
+    }
 }
 
 void SCustomAssetManagerEditorWindow::Construct(const FArguments& InArgs)
@@ -86,26 +127,54 @@ void SCustomAssetManagerEditorWindow::Construct(const FArguments& InArgs)
     
     // Instead of creating our own tab manager, use the global one directly
     static const FName AssetManagerTabsApp = FName("AssetManagerTabs");
+    
+    // Unregister existing tab spawners if they exist to prevent exceptions when reopening
+    if (FGlobalTabmanager::Get()->HasTabSpawner(TAB_ID_ASSETS))
+    {
+        FGlobalTabmanager::Get()->UnregisterTabSpawner(TAB_ID_ASSETS);
+        UE_LOG(LogTemp, Log, TEXT("Unregistered existing Assets tab spawner"));
+    }
+    
+    if (FGlobalTabmanager::Get()->HasTabSpawner(TAB_ID_BUNDLES))
+    {
+        FGlobalTabmanager::Get()->UnregisterTabSpawner(TAB_ID_BUNDLES);
+        UE_LOG(LogTemp, Log, TEXT("Unregistered existing Bundles tab spawner"));
+    }
+    
+    // Make sure the other tabs are unregistered too
+    if (FGlobalTabmanager::Get()->HasTabSpawner(TAB_ID_MEMORY))
+    {
+        FGlobalTabmanager::Get()->UnregisterTabSpawner(TAB_ID_MEMORY);
+        UE_LOG(LogTemp, Log, TEXT("Unregistered existing Memory tab spawner"));
+    }
+    
+    if (FGlobalTabmanager::Get()->HasTabSpawner(TAB_ID_DEPENDENCIES))
+    {
+        FGlobalTabmanager::Get()->UnregisterTabSpawner(TAB_ID_DEPENDENCIES);
+        UE_LOG(LogTemp, Log, TEXT("Unregistered existing Dependencies tab spawner"));
+    }
+    
+    // Register tab spawners
     FGlobalTabmanager::Get()->RegisterTabSpawner(
-        "Assets", 
+        TAB_ID_ASSETS, 
         FOnSpawnTab::CreateLambda([this](const FSpawnTabArgs& Args) { return this->SpawnAssetTab(Args); }))
         .SetDisplayName(LOCTEXT("AssetsTabTitle", "Assets"))
         .SetIcon(FSlateIcon(FAppStyle::GetAppStyleSetName(), "ContentBrowser.TabIcon"));
     
     FGlobalTabmanager::Get()->RegisterTabSpawner(
-        "Bundles", 
+        TAB_ID_BUNDLES, 
         FOnSpawnTab::CreateLambda([this](const FSpawnTabArgs& Args) { return this->SpawnBundleTab(Args); }))
         .SetDisplayName(LOCTEXT("BundlesTabTitle", "Bundles"))
         .SetIcon(FSlateIcon(FAppStyle::GetAppStyleSetName(), "ContentBrowser.TabIcon.Starred"));
     
     FGlobalTabmanager::Get()->RegisterTabSpawner(
-        "Memory", 
+        TAB_ID_MEMORY, 
         FOnSpawnTab::CreateLambda([this](const FSpawnTabArgs& Args) { return this->SpawnMemoryTab(Args); }))
         .SetDisplayName(LOCTEXT("MemoryTabTitle", "Memory Usage"))
         .SetIcon(FSlateIcon(FAppStyle::GetAppStyleSetName(), "Icons.Performance"));
     
     FGlobalTabmanager::Get()->RegisterTabSpawner(
-        "Dependencies", 
+        TAB_ID_DEPENDENCIES, 
         FOnSpawnTab::CreateLambda([this](const FSpawnTabArgs& Args) { return this->SpawnDependencyTab(Args); }))
         .SetDisplayName(LOCTEXT("DependenciesTabTitle", "Dependencies"))
         .SetIcon(FSlateIcon(FAppStyle::GetAppStyleSetName(), "Icons.Graph"));
@@ -1074,7 +1143,7 @@ TSharedRef<ITableRow> SCustomAssetManagerEditorWindow::GenerateBundleRow(TShared
     [
         SNew(SHorizontalBox)
         
-        // Bundle ID
+        // Bundle ID - Match the HeaderRow FillWidth (0.2f)
         + SHorizontalBox::Slot()
         .FillWidth(0.2f)
         .Padding(4, 0)
@@ -1084,7 +1153,7 @@ TSharedRef<ITableRow> SCustomAssetManagerEditorWindow::GenerateBundleRow(TShared
             .Text(FText::FromString(Item->Bundle->BundleId.ToString()))
         ]
         
-        // Name
+        // Display Name - Match the HeaderRow FillWidth (0.2f)
         + SHorizontalBox::Slot()
         .FillWidth(0.2f)
         .Padding(4, 0)
@@ -1094,7 +1163,7 @@ TSharedRef<ITableRow> SCustomAssetManagerEditorWindow::GenerateBundleRow(TShared
             .Text(Item->Bundle->DisplayName)
         ]
         
-        // Asset Count
+        // Assets - Match the HeaderRow FillWidth (0.2f)
         + SHorizontalBox::Slot()
         .FillWidth(0.2f)
         .Padding(4, 0)
@@ -1112,7 +1181,8 @@ TSharedRef<ITableRow> SCustomAssetManagerEditorWindow::GenerateBundleRow(TShared
             .Padding(FMargin(5, 0))
             [
                 SNew(SButton)
-                .Text(LOCTEXT("ViewAssetsButton", "View Assets"))
+                .ButtonStyle(FAppStyle::Get(), "SimpleButton")
+                .Text(LOCTEXT("ViewAssetsButton", "View"))
                 .ToolTipText(LOCTEXT("ViewAssetsTooltip", "View the assets in this bundle"))
                 .IsEnabled(Item->Bundle->AssetIds.Num() > 0)
                 .OnClicked_Lambda([this, Item]() {
@@ -1126,7 +1196,8 @@ TSharedRef<ITableRow> SCustomAssetManagerEditorWindow::GenerateBundleRow(TShared
                     // Create a list of assets
                     TArray<TSharedPtr<FAssetListItem>> AssetItems;
                     
-                    // Fill the list with bundle assets
+                    // Fill the list with bundle assets from both Assets and AssetIds arrays
+                    // First add assets from the Assets array
                     for (UCustomAssetBase* Asset : Item->Bundle->Assets)
                     {
                         if (Asset)
@@ -1137,6 +1208,44 @@ TSharedRef<ITableRow> SCustomAssetManagerEditorWindow::GenerateBundleRow(TShared
                             AssetItems.Add(AssetItem);
                         }
                     }
+                    
+                    // Then add any asset IDs that weren't already added
+                    UCustomAssetManager& AssetManager = UCustomAssetManager::Get();
+                    for (const FName& AssetId : Item->Bundle->AssetIds)
+                    {
+                        // Check if already added
+                        bool bAlreadyAdded = false;
+                        for (const TSharedPtr<FAssetListItem>& ExistingItem : AssetItems)
+                        {
+                            if (ExistingItem->AssetId == AssetId)
+                            {
+                                bAlreadyAdded = true;
+                                break;
+                            }
+                        }
+                        
+                        if (!bAlreadyAdded)
+                        {
+                            TSharedPtr<FAssetListItem> AssetItem = MakeShared<FAssetListItem>();
+                            AssetItem->AssetId = AssetId;
+                            
+                            // Try to get display name from loaded asset
+                            UCustomAssetBase* Asset = AssetManager.GetAssetById(AssetId);
+                            if (Asset)
+                            {
+                                AssetItem->DisplayName = Asset->DisplayName;
+                            }
+                            else
+                            {
+                                // Use ID as display name for unloaded assets
+                                AssetItem->DisplayName = FText::FromName(AssetId);
+                            }
+                            
+                            AssetItems.Add(AssetItem);
+                        }
+                    }
+                    
+                    // Dialog content continued...
                     
                     // Create a list view for the assets
                     TSharedPtr<SListView<TSharedPtr<FAssetListItem>>> AssetListView;
@@ -1178,6 +1287,7 @@ TSharedRef<ITableRow> SCustomAssetManagerEditorWindow::GenerateBundleRow(TShared
                         .HAlign(HAlign_Right)
                         [
                             SNew(SButton)
+                            .ButtonStyle(FAppStyle::Get(), "SimpleButton")
                             .Text(LOCTEXT("CloseButton", "Close"))
                             .OnClicked_Lambda([DialogWindow]() {
                                 FSlateApplication::Get().RequestDestroyWindow(DialogWindow);
@@ -1187,14 +1297,15 @@ TSharedRef<ITableRow> SCustomAssetManagerEditorWindow::GenerateBundleRow(TShared
                     );
                     
                     FSlateApplication::Get().AddModalWindow(DialogWindow, FGlobalTabmanager::Get()->GetRootWindow());
+                    
                     return FReply::Handled();
                 })
             ]
         ]
         
-        // Status
+        // Status - Match the HeaderRow FillWidth (0.15f)
         + SHorizontalBox::Slot()
-        .FillWidth(0.2f)
+        .FillWidth(0.15f)
         .Padding(4, 0)
         .VAlign(VAlign_Center)
         [
@@ -1202,9 +1313,9 @@ TSharedRef<ITableRow> SCustomAssetManagerEditorWindow::GenerateBundleRow(TShared
             .Text(StatusText)
         ]
         
-        // Memory
+        // Memory - Match the HeaderRow FillWidth (0.1f)
         + SHorizontalBox::Slot()
-        .FillWidth(0.15f)
+        .FillWidth(0.1f)
         .Padding(4, 0)
         .VAlign(VAlign_Center)
         [
@@ -1212,39 +1323,59 @@ TSharedRef<ITableRow> SCustomAssetManagerEditorWindow::GenerateBundleRow(TShared
             .Text(MemorySizeText)
         ]
         
-        // Bundle action buttons
+        // Actions - Match the HeaderRow FillWidth (0.15f)
         + SHorizontalBox::Slot()
         .FillWidth(0.15f)
         .Padding(4, 0)
+        .HAlign(HAlign_Right)
         .VAlign(VAlign_Center)
         [
             SNew(SHorizontalBox)
-            // Rename Button
+            
+            // Load button
             + SHorizontalBox::Slot()
             .AutoWidth()
-            .Padding(2, 0)
+            .Padding(FMargin(2, 0))
             [
                 SNew(SButton)
-                .ContentPadding(FMargin(4, 1))
-                .Text(LOCTEXT("RenameButton", "Rename"))
-                .ToolTipText(LOCTEXT("RenameButtonTooltip", "Rename this bundle"))
-                .OnClicked_Lambda([this, Item]()
-                {
-                    ShowRenameBundleDialog(Item->Bundle);
+                .ButtonStyle(FAppStyle::Get(), "SimpleButton")
+                .Text(LOCTEXT("LoadButton", "Load"))
+                .ToolTipText(LOCTEXT("LoadTooltip", "Load all assets in this bundle"))
+                .OnClicked_Lambda([this, Item]() {
+                    UCustomAssetManager& AssetManager = UCustomAssetManager::Get();
+                    AssetManager.LoadBundle(Item->Bundle->BundleId);
+                    UE_LOG(LogTemp, Log, TEXT("Loading bundle %s"), *Item->Bundle->BundleId.ToString());
                     return FReply::Handled();
                 })
             ]
-            // Delete Button
+            
+            // Unload button
             + SHorizontalBox::Slot()
             .AutoWidth()
-            .Padding(2, 0)
+            .Padding(FMargin(2, 0))
             [
                 SNew(SButton)
-                .ContentPadding(FMargin(4, 1))
+                .ButtonStyle(FAppStyle::Get(), "SimpleButton")
+                .Text(LOCTEXT("UnloadButton", "Unload"))
+                .ToolTipText(LOCTEXT("UnloadTooltip", "Unload all assets in this bundle"))
+                .OnClicked_Lambda([this, Item]() {
+                    UCustomAssetManager& AssetManager = UCustomAssetManager::Get();
+                    AssetManager.UnloadBundle(Item->Bundle->BundleId);
+                    UE_LOG(LogTemp, Log, TEXT("Unloading bundle %s"), *Item->Bundle->BundleId.ToString());
+                    return FReply::Handled();
+                })
+            ]
+            
+            // Delete button
+            + SHorizontalBox::Slot()
+            .AutoWidth()
+            .Padding(FMargin(2, 0))
+            [
+                SNew(SButton)
+                .ButtonStyle(FAppStyle::Get(), "SimpleButton")
                 .Text(LOCTEXT("DeleteButton", "Delete"))
-                .ToolTipText(LOCTEXT("DeleteButtonTooltip", "Delete this bundle"))
-                .OnClicked_Lambda([this, Item]()
-                {
+                .ToolTipText(LOCTEXT("DeleteTooltip", "Delete this bundle"))
+                .OnClicked_Lambda([this, Item]() {
                     ShowDeleteBundleDialog(Item->Bundle);
                     return FReply::Handled();
                 })
@@ -1721,7 +1852,33 @@ FReply SCustomAssetManagerEditorWindow::OnAddAssetToBundleClicked()
                             UCustomAssetBundle* BundleToSave = *SelectedBundle;
                             FName BundleId = BundleToSave->BundleId;
                             
-                            UE_LOG(LogTemp, Log, TEXT("Saving bundle after adding assets: ID=%s, DisplayName=%s, Assets=%d"), 
+                            // CRITICAL DIAGNOSTICS: Print bundle contents before saving
+                            BundleToSave->DebugPrintContents(TEXT("BEFORE_SAVE"));
+                            
+                            // CRITICAL FAILSAFE: Double check if assets are missing
+                            if (BundleToSave->AssetIds.Num() == 0 && AddedCount > 0)
+                            {
+                                UE_LOG(LogTemp, Error, TEXT("[CRITICAL] SaveBundle: CRITICAL ISSUE - Bundle reports %d assets added but AssetIds array is empty!"), AddedCount);
+                                
+                                // Emergency recovery - manually add assets that we know should be in the bundle
+                                for (const FName& AssetId : SelectedAssetIds)
+                                {
+                                    UE_LOG(LogTemp, Error, TEXT("[CRITICAL] SaveBundle: EMERGENCY - Manually adding asset %s to bundle"), *AssetId.ToString());
+                                    BundleToSave->AssetIds.AddUnique(AssetId);
+                                    
+                                    // Also add to loaded assets if possible
+                                    UCustomAssetBase* Asset = AssetManager.GetAssetById(AssetId);
+                                    if (Asset && !BundleToSave->Assets.Contains(Asset))
+                                    {
+                                        BundleToSave->Assets.Add(Asset);
+                                    }
+                                }
+                                
+                                // Print bundle contents after emergency recovery
+                                BundleToSave->DebugPrintContents(TEXT("EMERGENCY_RECOVERY"));
+                            }
+                            
+                            UE_LOG(LogTemp, Warning, TEXT("[CRITICAL] Saving bundle after adding assets: ID=%s, DisplayName=%s, Assets=%d"), 
                                 *BundleId.ToString(), 
                                 *BundleToSave->DisplayName.ToString(),
                                 BundleToSave->AssetIds.Num());
@@ -1740,9 +1897,36 @@ FReply SCustomAssetManagerEditorWindow::OnAddAssetToBundleClicked()
                             UCustomAssetBundle* SavedBundle = AssetManager.GetBundleById(BundleId);
                             if (SavedBundle)
                             {
-                                UE_LOG(LogTemp, Log, TEXT("After save: Bundle %s has %d assets"), 
+                                // CRITICAL DIAGNOSTICS: Print saved bundle contents
+                                SavedBundle->DebugPrintContents(TEXT("AFTER_SAVE"));
+                                
+                                UE_LOG(LogTemp, Warning, TEXT("[CRITICAL] After save: Bundle %s has %d assets"), 
                                     *SavedBundle->BundleId.ToString(), 
                                     SavedBundle->AssetIds.Num());
+                                    
+                                // CRITICAL FAILSAFE: If bundle still has no assets after saving, try one more time
+                                if (SavedBundle->AssetIds.Num() == 0 && AddedCount > 0)
+                                {
+                                    UE_LOG(LogTemp, Error, TEXT("[CRITICAL] FINAL ATTEMPT: Bundle still has no assets after save! Trying one last emergency save"));
+                                    
+                                    // Emergency recovery - manually add assets again to the saved bundle
+                                    for (const FName& AssetId : SelectedAssetIds)
+                                    {
+                                        UE_LOG(LogTemp, Error, TEXT("[CRITICAL] FINAL ATTEMPT: Manually adding asset %s to saved bundle"), *AssetId.ToString());
+                                        SavedBundle->AssetIds.AddUnique(AssetId);
+                                        
+                                        // Also add to loaded assets if possible
+                                        UCustomAssetBase* Asset = AssetManager.GetAssetById(AssetId);
+                                        if (Asset && !SavedBundle->Assets.Contains(Asset))
+                                        {
+                                            SavedBundle->Assets.Add(Asset);
+                                        }
+                                    }
+                                    
+                                    // Try saving one more time
+                                    SavedBundle->DebugPrintContents(TEXT("FINAL_ATTEMPT"));
+                                    AssetManager.SaveBundle(SavedBundle, TEXT("/Game/Bundles"));
+                                }
                             }
                             
                             // Refresh the asset list to update bundle membership

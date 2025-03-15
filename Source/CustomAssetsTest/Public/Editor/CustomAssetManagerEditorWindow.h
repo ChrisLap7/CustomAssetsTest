@@ -192,6 +192,13 @@ public:
         SLATE_ARGUMENT(TSharedPtr<SWindow>, OwnerWindow)
     SLATE_END_ARGS()
 
+    /** Constructor */
+    SCustomAssetManagerEditorWindow();
+    
+    /** Destructor */
+    ~SCustomAssetManagerEditorWindow();
+
+    /** Constructs the widget */
     void Construct(const FArguments& InArgs);
 
     /**
