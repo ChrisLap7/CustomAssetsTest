@@ -82,16 +82,17 @@ void UCustomAssetBundle::RemoveAsset(const FName& AssetId)
 
 bool UCustomAssetBundle::ContainsAsset(const FName& AssetId) const
 {
-    // Always check the AssetIds array first
+    // Always check the AssetIds array first - use direct Contains for better performance
     if (AssetIds.Contains(AssetId))
     {
         return true;
     }
     
     // For backward compatibility, also check the loaded Assets array
-    for (UCustomAssetBase* Asset : Assets)
+    // Use a more efficient range-based for loop with a reference to avoid copying
+    for (const UCustomAssetBase* Asset : Assets)
     {
-        if (Asset && Asset->AssetId == AssetId)
+        if (IsValid(Asset) && Asset->AssetId == AssetId)
         {
             return true;
         }

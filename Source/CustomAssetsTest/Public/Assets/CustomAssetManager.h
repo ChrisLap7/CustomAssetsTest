@@ -53,6 +53,67 @@ enum class EMemoryManagementPolicy : uint8
 };
 
 /**
+ * Enum defining different asset compression tiers
+ */
+UENUM(BlueprintType)
+enum class EAssetCompressionTier : uint8
+{
+    // No compression, fastest loading but largest size
+    None UMETA(DisplayName = "None"),
+    
+    // Low compression, good balance for critical assets
+    Low UMETA(DisplayName = "Low"),
+    
+    // Medium compression, default for most assets
+    Medium UMETA(DisplayName = "Medium"),
+    
+    // High compression, smallest size but slower loading
+    High UMETA(DisplayName = "High")
+};
+
+/**
+ * Information about an asset hotswap event
+ */
+USTRUCT(BlueprintType)
+struct FAssetHotswapInfo
+{
+    GENERATED_BODY()
+    
+    // ID of the asset that was hotswapped
+    UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Asset Hotswapping")
+    FName AssetId;
+    
+    FAssetHotswapInfo() : AssetId(NAME_None) {}
+};
+
+/**
+ * Struct to associate bundles with levels for streaming
+ */
+USTRUCT(BlueprintType)
+struct FBundleLevelAssociation
+{
+    GENERATED_BODY()
+    
+    // ID of the bundle to load
+    UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Level Streaming")
+    FName BundleId;
+    
+    // Name of the level this bundle is associated with
+    UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Level Streaming")
+    FName LevelName;
+    
+    // Distance at which to preload the bundle (in world units)
+    UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Level Streaming")
+    float PreloadDistance = 5000.0f;
+    
+    // Whether to automatically unload the bundle when the level is unloaded
+    UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Level Streaming")
+    bool bUnloadWithLevel = true;
+    
+    FBundleLevelAssociation() : BundleId(NAME_None), LevelName(NAME_None), PreloadDistance(5000.0f), bUnloadWithLevel(true) {}
+};
+
+/**
  * Custom asset manager for handling loading, unloading, and tracking custom assets
  */
 UCLASS()
@@ -152,11 +213,11 @@ public:
 
     // Save a bundle to the project
     UFUNCTION(BlueprintCallable, Category = "Asset Bundles")
-    bool SaveBundle(UCustomAssetBundle* Bundle, const FString& PackagePath);
+    bool SaveBundle(UCustomAssetBundle* Bundle, const FString& PackagePath = TEXT(""));
 
     // Save all bundles to the project
     UFUNCTION(BlueprintCallable, Category = "Asset Bundles")
-    int32 SaveAllBundles(const FString& BasePath);
+    int32 SaveAllBundles(const FString& BasePath = TEXT(""));
 
     // Scan for all available bundles in the content directory
     UFUNCTION(BlueprintCallable, Category = "Asset Bundles")
@@ -250,6 +311,100 @@ public:
     UFUNCTION(BlueprintCallable, Category = "Memory Management")
     int64 EstimateAssetMemoryUsage(UCustomAssetBase* Asset) const;
 
+    // Helper method for bundle loading completion
+    void OnBundleLoaded(FName BundleId);
+
+    // Helper method for async asset loading completion
+    void OnAssetLoaded(FName AssetId, FSoftObjectPath AssetPath);
+
+    // ASSET PREFETCHING SYSTEM
+    
+    // Prefetch assets in a radius around a location
+    UFUNCTION(BlueprintCallable, Category = "Asset Prefetching")
+    void PrefetchAssetsInRadius(FVector Location, float Radius, int32 MaxAssets = 10);
+
+    // Prefetch specific assets with low priority
+    UFUNCTION(BlueprintCallable, Category = "Asset Prefetching")
+    void PrefetchAssets(const TArray<FName>& AssetIds);
+    
+    // Register an asset's world location for spatial prefetching
+    UFUNCTION(BlueprintCallable, Category = "Asset Prefetching")
+    void RegisterAssetLocation(const FName& AssetId, const FVector& WorldLocation);
+    
+    // Get assets within a radius of a location
+    UFUNCTION(BlueprintCallable, Category = "Asset Prefetching")
+    TArray<FName> GetAssetsInRadius(const FVector& Location, float Radius) const;
+    
+    // Estimate distance between an asset and location (if asset has registered location)
+    UFUNCTION(BlueprintCallable, Category = "Asset Prefetching")
+    float GetDistanceToAsset(const FName& AssetId, const FVector& FromLocation) const;
+    
+    // ASSET COMPRESSION TIERS
+    
+    // Set compression tier for a specific asset
+    UFUNCTION(BlueprintCallable, Category = "Asset Compression")
+    void SetAssetCompressionTier(const FName& AssetId, EAssetCompressionTier Tier);
+    
+    // Get compression tier for a specific asset
+    UFUNCTION(BlueprintCallable, Category = "Asset Compression")
+    EAssetCompressionTier GetAssetCompressionTier(const FName& AssetId) const;
+
+    // Set default compression tier for new assets
+    UFUNCTION(BlueprintCallable, Category = "Asset Compression")
+    void SetDefaultCompressionTier(EAssetCompressionTier Tier);
+    
+    // Recompress an asset with a different compression tier
+    UFUNCTION(BlueprintCallable, Category = "Asset Compression")
+    bool RecompressAsset(const FName& AssetId, EAssetCompressionTier NewTier);
+    
+    // LEVEL STREAMING INTEGRATION
+    
+    // Register a bundle to be loaded with a level
+    UFUNCTION(BlueprintCallable, Category = "Level Streaming")
+    void RegisterBundleWithLevel(FName BundleId, FName LevelName, float PreloadDistance = 5000.f, bool bUnloadWithLevel = true);
+    
+    // Unregister a bundle from a level
+    UFUNCTION(BlueprintCallable, Category = "Level Streaming")
+    void UnregisterBundleFromLevel(FName BundleId, FName LevelName);
+    
+    // Update level-based bundles based on player location
+    UFUNCTION(BlueprintCallable, Category = "Level Streaming")
+    void UpdateLevelBasedBundles(APlayerController* PlayerController);
+    
+    // Get distance to a specific level from a location
+    UFUNCTION(BlueprintCallable, Category = "Level Streaming")
+    float GetDistanceToLevel(FName LevelName, const FVector& FromLocation) const;
+    
+    // Notify the asset manager that a level has been loaded
+    UFUNCTION(BlueprintCallable, Category = "Level Streaming")
+    void OnLevelLoaded(FName LevelName);
+    
+    // Notify the asset manager that a level has been unloaded
+    UFUNCTION(BlueprintCallable, Category = "Level Streaming")
+    void OnLevelUnloaded(FName LevelName);
+    
+    // ASSET HOTSWAPPING
+    
+    // Replace an asset at runtime with a new version
+    UFUNCTION(BlueprintCallable, Category = "Asset Hotswapping")
+    bool HotswapAsset(const FName& AssetId, UCustomAssetBase* NewAssetVersion);
+    
+    // Register a listener for asset hotswap events
+    UFUNCTION(BlueprintCallable, Category = "Asset Hotswapping")
+    void RegisterHotswapListener(UObject* Listener, FName FunctionName);
+    
+    // Unregister a hotswap listener
+    UFUNCTION(BlueprintCallable, Category = "Asset Hotswapping")
+    void UnregisterHotswapListener(UObject* Listener);
+    
+    // Check if an asset has a pending hotswap
+    UFUNCTION(BlueprintCallable, Category = "Asset Hotswapping")
+    bool HasPendingHotswap(const FName& AssetId) const;
+    
+    // Apply all pending hotswaps
+    UFUNCTION(BlueprintCallable, Category = "Asset Hotswapping")
+    int32 ApplyPendingHotswaps();
+
 private:
     // Map of asset IDs to loaded assets
     UPROPERTY()
@@ -289,4 +444,36 @@ private:
 
     // Helper method to calculate memory used by dependencies recursively
     int64 CalculateDependenciesMemoryUsage(UCustomAssetBase* Asset, TSet<FName>& ProcessedAssets) const;
+
+    // Map of asset IDs to their world locations (for prefetching)
+    TMap<FName, FVector> AssetLocations;
+    
+    // Map of asset IDs to their compression tiers
+    TMap<FName, EAssetCompressionTier> AssetCompressionTiers;
+    
+    // Default compression tier for new assets
+    EAssetCompressionTier DefaultCompressionTier = EAssetCompressionTier::Medium;
+    
+    // List of bundle-level associations for level streaming
+    UPROPERTY()
+    TArray<FBundleLevelAssociation> LevelBundleAssociations;
+    
+    // Set of currently loaded levels
+    TSet<FName> LoadedLevels;
+    
+    // Map of pending hotswaps (asset ID to new asset version)
+    UPROPERTY()
+    TMap<FName, UCustomAssetBase*> PendingHotswaps;
+    
+    // List of hotswap listeners
+    TArray<TPair<UObject*, FName>> HotswapListeners;
+    
+    // Helper function to stream a low-priority asset for prefetching
+    void LowPriorityStreamAsset(const FName& AssetId);
+    
+    // Estimate asset size from metadata without loading
+    int64 EstimateAssetSizeFromMetadata(const FName& AssetId) const;
+    
+    // Notify all hotswap listeners about an asset change
+    void NotifyHotswapListeners(const FName& AssetId);
 }; 

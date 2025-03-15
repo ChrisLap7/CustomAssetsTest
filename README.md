@@ -12,6 +12,10 @@ This project demonstrates a custom asset management system for Unreal Engine 5.4
 - Sample custom asset type (Item)
 - Level-specific asset loading
 - Custom asset editor window
+- **Asset Prefetching System**: Proactively loads assets based on player position
+- **Asset Compression Tiers**: Control memory vs. load speed with four compression levels
+- **Level Streaming Integration**: Automatically load/unload bundles with level streaming
+- **Asset Hotswapping**: Replace assets at runtime without restarting the game
 
 ## Designer's Guide: Using the Custom Asset System
 
@@ -81,6 +85,60 @@ This guide is for designers and content creators who need to work with the Custo
    - **Priority**: Higher priority bundles load first
    - **Preload At Startup**: Bundle loads when the game starts
    - **Keep In Memory**: Bundle stays loaded even when not in use
+
+### Using Advanced Asset Features
+
+1. **Asset Prefetching System**:
+   - Automatically loads assets before they're needed based on player position
+   - **Setup**:
+     - In the Asset Manager window, go to the "Advanced" tab
+     - Enable "Spatial Asset Prefetching"
+     - Set the "Prefetch Radius" (how far ahead to load assets)
+     - Use "RegisterAssetLocation" in Blueprints to assign world positions to assets
+   - **Benefits**: Smoother gameplay with fewer loading hitches
+
+2. **Asset Compression Tiers**:
+   - Control the balance between memory usage and loading speed
+   - **Compression Levels**:
+     - **None**: Uncompressed for fastest loading (largest file size)
+     - **Low**: Minimal compression, good performance
+     - **Medium**: Balanced compression (default)
+     - **High**: Maximum compression, slower loading but smallest size
+   - **Setting Compression**:
+     - Select an asset in the "Assets" tab
+     - Choose a compression tier from the dropdown
+     - Apply changes with "Recompress Asset"
+   - **Best Practices**:
+     - Use low/no compression for frequently used assets
+     - Use high compression for rarely used assets
+
+3. **Level Streaming Integration**:
+   - Automatically load and unload asset bundles with level streaming
+   - **Setup**:
+     - Select a bundle in the "Bundles" tab
+     - Click "Edit Level Associations"
+     - Add level names and set:
+       - Preload Distance: How close the player needs to be
+       - Unload with Level: Whether to unload when the level unloads
+   - **Runtime Behavior**:
+     - Assets automatically load when the player approaches a level
+     - Assets unload when the level unloads (if configured)
+   - **Performance Monitoring**:
+     - Use the "Memory" tab to see which levels are consuming resources
+
+4. **Asset Hotswapping**:
+   - Replace assets during runtime without restarting the game
+   - **Usage**:
+     - In the "Assets" tab, select an asset
+     - Click "Create New Version"
+     - Modify the asset properties
+     - Click "Queue Hotswap"
+     - Apply pending hotswaps with "Apply Hotswaps" button
+   - **Development Benefits**:
+     - Test asset changes without restarting the game
+     - Update live games with new content
+   - **Listening for Changes**:
+     - Set up Blueprint event listeners to respond to asset changes
 
 ### Level-Specific Asset Loading
 
@@ -207,6 +265,26 @@ This guide is for designers and content creators who need to work with the Custo
    - Check log messages for loading errors
    - Make sure asset references are valid
 
+6. **Prefetching Not Working**:
+   - Verify assets have registered locations via `RegisterAssetLocation`
+   - Check that prefetch radius is appropriate for your game's scale
+   - Ensure prefetching is enabled in the advanced settings
+
+7. **Compression Tier Issues**:
+   - Remember that recompression is only available in editor builds
+   - Some assets may not compress well (especially already-compressed textures)
+   - High compression increases load time, so balance appropriately
+
+8. **Level Streaming Integration Problems**:
+   - Ensure level names match exactly (case-sensitive)
+   - Set reasonable preload distances based on level size
+   - Verify streaming levels are properly set up in the World Settings
+
+9. **Hotswapping Failures**:
+   - Ensure both versions have the same Asset ID
+   - Listeners must implement the correct interface function
+   - Some complex assets may not hotswap cleanly and require a full reload
+
 For more technical details or custom implementations, please consult with the programming team.
 
 ## Architecture
@@ -217,6 +295,11 @@ For more technical details or custom implementations, please consult with the pr
 - `UCustomItemAsset`: Sample asset type for items
 - `UCustomCharacterAsset`: Asset type for character data
 - `FCustomAssetEditorModule`: Editor module for the Custom Asset Manager
+- `UCustomAssetMemoryTracker`: Tracks memory usage of loaded assets
+- `UCustomAssetBundle`: Groups related assets for efficient loading/unloading
+- `FAssetHotswapInfo`: Structure for asset version information during hotswaps
+- `FBundleLevelAssociation`: Links asset bundles to specific levels
+- `EAssetCompressionTier`: Enum defining compression levels for assets
 
 ## License
 

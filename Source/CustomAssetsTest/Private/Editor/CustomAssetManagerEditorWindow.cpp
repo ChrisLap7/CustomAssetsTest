@@ -2085,6 +2085,7 @@ bool SCustomAssetManagerEditorWindow::ImportAssetsFromCSV(const FString& FilePat
         
         // Split the line into values, correctly handling quoted strings
         TArray<FString> Values;
+        Values.Reserve(Headers.Num()); // Pre-allocate to avoid reallocations
         FString CurrentField;
         bool bInQuote = false;
         

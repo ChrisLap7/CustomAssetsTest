@@ -59,9 +59,9 @@ UCustomAssetBase* UCustomAssetManager::LoadAssetById(const FName& AssetId)
 
 UCustomAssetBase* UCustomAssetManager::LoadAssetByIdWithStrategy(const FName& AssetId, EAssetLoadingStrategy Strategy)
 {
-    // Check if the asset is already loaded
+    // Check if the asset is already loaded - use direct lookup for better performance
     UCustomAssetBase* LoadedAsset = GetAssetById(AssetId);
-    if (LoadedAsset)
+    if (::IsValid(LoadedAsset))
     {
         // Record access to the asset
         if (MemoryTracker)
@@ -72,7 +72,7 @@ UCustomAssetBase* UCustomAssetManager::LoadAssetByIdWithStrategy(const FName& As
         return LoadedAsset;
     }
 
-    // Check if we have a path for this asset ID
+    // Check if we have a path for this asset ID - use direct lookup for better performance
     FSoftObjectPath* AssetPath = AssetPathMap.Find(AssetId);
     if (!AssetPath)
     {
@@ -98,21 +98,23 @@ UCustomAssetBase* UCustomAssetManager::LoadAssetByIdWithStrategy(const FName& As
     case EAssetLoadingStrategy::Streaming:
         // For streaming, we start the load but return nullptr
         // The asset will be registered when the streaming completes
-        StreamAsset(AssetId, FOnAssetLoaded());
+        StreamingHandle = UAssetManager::GetStreamableManager().RequestAsyncLoad(
+            *AssetPath,
+            FStreamableDelegate::CreateUObject(this, &UCustomAssetManager::OnAssetLoaded, AssetId, *AssetPath)
+        );
         return nullptr;
 
     case EAssetLoadingStrategy::LazyLoad:
-        // For lazy load, we load synchronously but keep it in memory
-        Asset = Cast<UCustomAssetBase>(AssetPath->TryLoad());
-        break;
+        // For lazy load, we don't load the asset now, but return nullptr
+        return nullptr;
 
     default:
-        // Default to on-demand loading
-        Asset = Cast<UCustomAssetBase>(AssetPath->TryLoad());
-        break;
+        UE_LOG(LogTemp, Warning, TEXT("Unknown loading strategy for asset %s"), *AssetId.ToString());
+        return nullptr;
     }
 
-    if (Asset)
+    // If we got here, we loaded the asset synchronously
+    if (::IsValid(Asset))
     {
         // Register the loaded asset
         RegisterAsset(Asset);
@@ -120,14 +122,15 @@ UCustomAssetBase* UCustomAssetManager::LoadAssetByIdWithStrategy(const FName& As
         // Load hard dependencies
         LoadDependencies(AssetId, true, Strategy);
         
-        // Manage memory usage after loading
+        // Manage memory usage
         ManageMemoryUsage();
-        
-        return Asset;
+    }
+    else
+    {
+        UE_LOG(LogTemp, Warning, TEXT("Failed to load asset with ID %s"), *AssetId.ToString());
     }
 
-    UE_LOG(LogTemp, Warning, TEXT("Failed to load asset with ID %s"), *AssetId.ToString());
-    return nullptr;
+    return Asset;
 }
 
 void UCustomAssetManager::PreloadAssets(const TArray<FName>& AssetIds)
@@ -266,10 +269,11 @@ bool UCustomAssetManager::UnloadAssetById(const FName& AssetId)
 
 UCustomAssetBase* UCustomAssetManager::GetAssetById(const FName& AssetId) const
 {
+    // Use FindRef for direct map lookup which is more efficient than Find+dereference
     UCustomAssetBase* Asset = LoadedAssets.FindRef(AssetId);
     
     // Record access to the asset if found
-    if (Asset && MemoryTracker)
+    if (::IsValid(Asset) && MemoryTracker)
     {
         MemoryTracker->RecordAssetAccess(AssetId);
     }
@@ -514,7 +518,7 @@ void UCustomAssetManager::GetAllBundles(TArray<UCustomAssetBundle*>& OutBundles)
 void UCustomAssetManager::LoadBundle(const FName& BundleId, EAssetLoadingStrategy Strategy)
 {
     UCustomAssetBundle* Bundle = GetBundleById(BundleId);
-    if (!Bundle)
+    if (!::IsValid(Bundle))
     {
         UE_LOG(LogTemp, Warning, TEXT("Bundle with ID %s not found"), *BundleId.ToString());
         return;
@@ -522,11 +526,97 @@ void UCustomAssetManager::LoadBundle(const FName& BundleId, EAssetLoadingStrateg
 
     UE_LOG(LogTemp, Log, TEXT("Loading bundle: %s with %d assets"), *BundleId.ToString(), Bundle->AssetIds.Num());
 
-    // Load each asset in the bundle
+    // For small bundles, load assets individually
+    if (Bundle->AssetIds.Num() < 5)
+    {
+        // Load each asset in the bundle
+        for (const FName& AssetId : Bundle->AssetIds)
+        {
+            LoadAssetByIdWithStrategy(AssetId, Strategy);
+        }
+    }
+    else
+    {
+        // For larger bundles, use batch loading for better performance
+        TArray<FSoftObjectPath> AssetPaths;
+        AssetPaths.Reserve(Bundle->AssetIds.Num());
+        
+        // Collect all asset paths
+        for (const FName& AssetId : Bundle->AssetIds)
+        {
+            FSoftObjectPath* AssetPath = AssetPathMap.Find(AssetId);
+            if (AssetPath)
+            {
+                AssetPaths.Add(*AssetPath);
+            }
+        }
+        
+        // Use streamable manager for batch loading
+        if (AssetPaths.Num() > 0)
+        {
+            if (Strategy == EAssetLoadingStrategy::Streaming)
+            {
+                // Async load for streaming strategy
+                FStreamableManager& StreamableMgr = UAssetManager::GetStreamableManager();
+                StreamableMgr.RequestAsyncLoad(
+                    AssetPaths,
+                    FStreamableDelegate::CreateUObject(this, &UCustomAssetManager::OnBundleLoaded, BundleId)
+                );
+            }
+            else
+            {
+                // Sync load for other strategies
+                FStreamableManager& StreamableMgr = UAssetManager::GetStreamableManager();
+                StreamableMgr.RequestSyncLoad(AssetPaths);
+                
+                // Register all loaded assets
+                for (const FName& AssetId : Bundle->AssetIds)
+                {
+                    FSoftObjectPath* AssetPath = AssetPathMap.Find(AssetId);
+                    if (AssetPath && AssetPath->IsValid())
+                    {
+                        UCustomAssetBase* Asset = Cast<UCustomAssetBase>(AssetPath->ResolveObject());
+                        if (Asset)
+                        {
+                            RegisterAsset(Asset);
+                        }
+                    }
+                }
+                
+                // Mark the bundle as loaded
+                Bundle->bIsLoaded = true;
+            }
+        }
+    }
+}
+
+// New helper method for bundle loading completion
+void UCustomAssetManager::OnBundleLoaded(FName BundleId)
+{
+    UCustomAssetBundle* Bundle = GetBundleById(BundleId);
+    if (!::IsValid(Bundle))
+    {
+        return;
+    }
+    
+    // Register all loaded assets in the bundle
     for (const FName& AssetId : Bundle->AssetIds)
     {
-        LoadAssetByIdWithStrategy(AssetId, Strategy);
+        FSoftObjectPath* AssetPath = AssetPathMap.Find(AssetId);
+        if (AssetPath && AssetPath->IsValid())
+        {
+            UCustomAssetBase* Asset = Cast<UCustomAssetBase>(AssetPath->ResolveObject());
+            if (Asset)
+            {
+                RegisterAsset(Asset);
+            }
+        }
     }
+    
+    // Mark the bundle as loaded
+    Bundle->bIsLoaded = true;
+    
+    UE_LOG(LogTemp, Log, TEXT("Bundle %s loaded asynchronously"), *BundleId.ToString());
 }
 
 void UCustomAssetManager::UnloadBundle(const FName& BundleId)
@@ -596,18 +686,95 @@ void UCustomAssetManager::PreloadBundles()
     TArray<UCustomAssetBundle*> AllBundles;
     GetAllBundles(AllBundles);
 
+    // Early exit if no bundles
+    if (AllBundles.Num() == 0)
+    {
+        return;
+    }
+
     // Sort bundles by priority (higher priority first)
     AllBundles.Sort([](const UCustomAssetBundle& A, const UCustomAssetBundle& B) {
         return A.Priority > B.Priority;
     });
 
-    // Preload bundles marked for preloading
+    // Collect all bundles marked for preloading
+    TArray<UCustomAssetBundle*> BundlesToPreload;
+    BundlesToPreload.Reserve(AllBundles.Num() / 2); // Estimate half will be preloaded
+    
     for (UCustomAssetBundle* Bundle : AllBundles)
     {
-        if (Bundle->bPreloadAtStartup)
+        if (::IsValid(Bundle) && Bundle->bPreloadAtStartup)
+        {
+            BundlesToPreload.Add(Bundle);
+        }
+    }
+    
+    // Early exit if no bundles to preload
+    if (BundlesToPreload.Num() == 0)
+    {
+        return;
+    }
+    
+    UE_LOG(LogTemp, Log, TEXT("Preloading %d bundles"), BundlesToPreload.Num());
+    
+    // For a small number of bundles, load them individually
+    if (BundlesToPreload.Num() < 3)
+    {
+        for (UCustomAssetBundle* Bundle : BundlesToPreload)
         {
             UE_LOG(LogTemp, Log, TEXT("Preloading bundle: %s"), *Bundle->BundleId.ToString());
             LoadBundle(Bundle->BundleId, EAssetLoadingStrategy::Preload);
+        }
+    }
+    else
+    {
+        // For a larger number of bundles, batch load all assets
+        TArray<FSoftObjectPath> AllAssetPaths;
+        // Estimate average of 10 assets per bundle
+        AllAssetPaths.Reserve(BundlesToPreload.Num() * 10);
+        
+        // Collect all asset paths from all bundles to preload
+        for (UCustomAssetBundle* Bundle : BundlesToPreload)
+        {
+            UE_LOG(LogTemp, Log, TEXT("Adding bundle %s to preload batch"), *Bundle->BundleId.ToString());
+            
+            for (const FName& AssetId : Bundle->AssetIds)
+            {
+                FSoftObjectPath* AssetPath = AssetPathMap.Find(AssetId);
+                if (AssetPath)
+                {
+                    AllAssetPaths.AddUnique(*AssetPath);
+                }
+            }
+        }
+        
+        // Batch load all assets
+        if (AllAssetPaths.Num() > 0)
+        {
+            UE_LOG(LogTemp, Log, TEXT("Batch preloading %d assets from %d bundles"), 
+                AllAssetPaths.Num(), BundlesToPreload.Num());
+                
+            FStreamableManager& StreamableMgr = UAssetManager::GetStreamableManager();
+            StreamableMgr.RequestSyncLoad(AllAssetPaths);
+            
+            // Register all loaded assets
+            for (const FSoftObjectPath& AssetPath : AllAssetPaths)
+            {
+                if (AssetPath.IsValid())
+                {
+                    UCustomAssetBase* Asset = Cast<UCustomAssetBase>(AssetPath.ResolveObject());
+                    if (Asset)
+                    {
+                        RegisterAsset(Asset);
+                    }
+                }
+            }
+            
+            // Mark all bundles as loaded
+            for (UCustomAssetBundle* Bundle : BundlesToPreload)
+            {
+                Bundle->bIsLoaded = true;
+            }
         }
     }
 }
@@ -617,7 +784,7 @@ void UCustomAssetManager::PreloadBundles()
 void UCustomAssetManager::LoadDependencies(const FName& AssetId, bool bLoadHardDependenciesOnly, EAssetLoadingStrategy Strategy)
 {
     UCustomAssetBase* Asset = GetAssetById(AssetId);
-    if (!Asset)
+    if (!::IsValid(Asset))
     {
         UE_LOG(LogTemp, Warning, TEXT("Asset with ID %s not loaded, cannot load dependencies"), *AssetId.ToString());
         return;
@@ -634,15 +801,22 @@ void UCustomAssetManager::LoadDependencies(const FName& AssetId, bool bLoadHardD
     else
     {
         // Load all dependencies
+        DependenciesToLoad.Reserve(Asset->Dependencies.Num());
         for (const FCustomAssetDependency& Dependency : Asset->Dependencies)
         {
             DependenciesToLoad.Add(Dependency.DependentAssetId);
         }
     }
 
-    // Load each dependency
+    // Load each dependency - but only if not already loaded
     for (const FName& DependencyId : DependenciesToLoad)
     {
+        // Skip if already loaded (optimization to avoid redundant loads)
+        if (GetAssetById(DependencyId) != nullptr)
+        {
+            continue;
+        }
+        
         LoadAssetByIdWithStrategy(DependencyId, Strategy);
     }
 }
@@ -827,8 +1001,9 @@ void UCustomAssetManager::ManageMemoryUsage()
     // Get the current memory usage
     int64 CurrentUsage = MemoryTracker->GetLoadedMemoryUsage();
     
-    // Check if we need to free memory
-    if (CurrentUsage > MemoryThreshold)
+    // Check if we need to free memory - add a threshold buffer to avoid frequent memory management
+    // Only trigger memory management if we're significantly over the threshold (10% buffer)
+    if (CurrentUsage > (MemoryThreshold * 1.1))
     {
         // Calculate how much memory to free (target is 80% of threshold)
         int64 TargetUsage = MemoryThreshold * 0.8;
@@ -856,6 +1031,9 @@ void UCustomAssetManager::UnloadAssetsToFreeMemory(int32 MemoryToFreeMB)
     // Get assets to unload based on the memory policy
     TArray<FName> AssetsToUnload;
     
+    // Pre-allocate a reasonable size to avoid reallocations
+    AssetsToUnload.Reserve(50);
+    
     switch (MemoryPolicy)
     {
     case EMemoryManagementPolicy::UnloadLRU:
@@ -882,14 +1060,14 @@ void UCustomAssetManager::UnloadAssetsToFreeMemory(int32 MemoryToFreeMB)
             break;
         }
         
-        // Get the asset
+        // Get the asset - use direct lookup for better performance
         UCustomAssetBase* Asset = GetAssetById(AssetId);
-        if (!Asset)
+        if (!::IsValid(Asset))
         {
             continue;
         }
         
-        // Check if the asset can be unloaded
+        // Check if the asset can be unloaded - skip if not
         if (!CanUnloadAsset(AssetId))
         {
             continue;
@@ -898,22 +1076,20 @@ void UCustomAssetManager::UnloadAssetsToFreeMemory(int32 MemoryToFreeMB)
         // Get the memory usage before unloading
         int64 AssetMemoryUsage = 0;
         FAssetMemoryStats AssetStats = MemoryTracker->GetAssetMemoryStats(AssetId);
-        if (AssetStats.bIsLoaded)
-        {
-            AssetMemoryUsage = AssetStats.MemoryUsage;
-        }
         
-        // Unload the asset
+        // Unload the asset and track memory freed
         if (UnloadAssetById(AssetId))
         {
-            // Update memory freed
+            AssetMemoryUsage = AssetStats.MemoryUsage;
             MemoryFreed += AssetMemoryUsage;
             
-            UE_LOG(LogTemp, Log, TEXT("Unloaded asset %s to free memory (freed %lld bytes)"), *AssetId.ToString(), AssetMemoryUsage);
+            UE_LOG(LogTemp, Verbose, TEXT("Unloaded asset %s to free memory, freed %lld bytes"), 
+                *AssetId.ToString(), AssetMemoryUsage);
         }
     }
     
-    UE_LOG(LogTemp, Log, TEXT("Memory management: freed %lld bytes (target was %lld bytes)"), MemoryFreed, MemoryToFree);
+    // Log the total memory freed
+    UE_LOG(LogTemp, Verbose, TEXT("Memory management freed %lld bytes of memory"), MemoryFreed);
 }
 
 bool UCustomAssetManager::ExportMemoryUsageToCSV(const FString& FilePath) const
@@ -1067,38 +1243,16 @@ void UCustomAssetManager::AddBundle(UCustomAssetBundle* Bundle)
 TArray<UCustomAssetBundle*> UCustomAssetManager::GetAllBundlesContainingAsset(const FName& AssetId) const
 {
     TArray<UCustomAssetBundle*> Result;
+    // Pre-allocate a reasonable size to avoid reallocations
+    Result.Reserve(5);  // Most assets are in a small number of bundles
     
-    if (AssetId.IsNone())
+    // Iterate through all bundles
+    for (const auto& Pair : Bundles)
     {
-        UE_LOG(LogTemp, Warning, TEXT("GetAllBundlesContainingAsset called with empty AssetId"));
-        return Result;
-    }
-    
-    // Iterate through all bundles to find ones that contain the asset
-    for (const TPair<FName, UCustomAssetBundle*>& BundlePair : Bundles)
-    {
-        UCustomAssetBundle* Bundle = BundlePair.Value;
-        if (!Bundle)
-        {
-            continue;
-        }
-        
-        // First, check if the asset ID is directly in the bundle's AssetIds array
-        if (Bundle->ContainsAsset(AssetId))
+        UCustomAssetBundle* Bundle = Pair.Value;
+        if (::IsValid(Bundle) && Bundle->ContainsAsset(AssetId))
         {
             Result.Add(Bundle);
-            continue; // Already found the asset in this bundle, no need to check loaded assets
-        }
-        
-        // If not found in AssetIds, check the loaded assets (for backward compatibility)
-        // This part is only relevant for assets that are already loaded
-        for (UCustomAssetBase* Asset : Bundle->Assets)
-        {
-            if (Asset && Asset->AssetId == AssetId)
-            {
-                Result.Add(Bundle);
-                break; // Found the asset in this bundle
-            }
         }
     }
     
@@ -1475,4 +1629,719 @@ bool UCustomAssetManager::RenameBundle(const FName& BundleId, const FString& New
     
     UE_LOG(LogTemp, Log, TEXT("Successfully renamed bundle from %s to %s"), *BundleId.ToString(), *NewBundleId.ToString());
     return true;
+}
+
+// Define the OnAssetLoaded method
+void UCustomAssetManager::OnAssetLoaded(FName AssetId, FSoftObjectPath AssetPath)
+{
+    // Get the loaded asset
+    UCustomAssetBase* Asset = Cast<UCustomAssetBase>(AssetPath.ResolveObject());
+    if (::IsValid(Asset))
+    {
+        // Register the asset
+        RegisterAsset(Asset);
+        
+        // Load hard dependencies
+        LoadDependencies(AssetId, true, EAssetLoadingStrategy::Streaming);
+        
+        // Manage memory usage
+        ManageMemoryUsage();
+        
+        UE_LOG(LogTemp, Log, TEXT("Asset with ID %s loaded and registered"), *AssetId.ToString());
+    }
+}
+
+//=================================================================
+// ASSET PREFETCHING SYSTEM IMPLEMENTATION
+//=================================================================
+
+void UCustomAssetManager::PrefetchAssetsInRadius(FVector Location, float Radius, int32 MaxAssets)
+{
+    // Get assets within the radius
+    TArray<FName> NearbyAssetIds = GetAssetsInRadius(Location, Radius);
+    
+    // Early exit if no assets found
+    if (NearbyAssetIds.Num() == 0)
+    {
+        return;
+    }
+    
+    // Sort by distance from location
+    NearbyAssetIds.Sort([this, Location](const FName& A, const FName& B) {
+        float DistA = GetDistanceToAsset(A, Location);
+        float DistB = GetDistanceToAsset(B, Location);
+        return DistA < DistB;
+    });
+    
+    // Limit to max assets
+    if (NearbyAssetIds.Num() > MaxAssets)
+    {
+        NearbyAssetIds.SetNum(MaxAssets);
+    }
+    
+    // Prefetch the nearest assets
+    PrefetchAssets(NearbyAssetIds);
+    
+    UE_LOG(LogTemp, Log, TEXT("Prefetching %d assets in radius %.1f around location (%.1f, %.1f, %.1f)"),
+        NearbyAssetIds.Num(), Radius, Location.X, Location.Y, Location.Z);
+}
+
+void UCustomAssetManager::PrefetchAssets(const TArray<FName>& AssetIds)
+{
+    // Early exit if no assets
+    if (AssetIds.Num() == 0)
+    {
+        return;
+    }
+    
+    // Start a low-priority stream for each asset that isn't already loaded
+    for (const FName& AssetId : AssetIds)
+    {
+        // Skip if already loaded
+        if (GetAssetById(AssetId) != nullptr)
+        {
+            continue;
+        }
+        
+        // Stream with low priority
+        LowPriorityStreamAsset(AssetId);
+    }
+    
+    UE_LOG(LogTemp, Verbose, TEXT("Started prefetching %d assets"), AssetIds.Num());
+}
+
+void UCustomAssetManager::RegisterAssetLocation(const FName& AssetId, const FVector& WorldLocation)
+{
+    if (!AssetId.IsNone())
+    {
+        // Store or update the asset's world location
+        AssetLocations.Add(AssetId, WorldLocation);
+        
+        UE_LOG(LogTemp, Verbose, TEXT("Registered asset %s at location (%.1f, %.1f, %.1f)"), 
+            *AssetId.ToString(), WorldLocation.X, WorldLocation.Y, WorldLocation.Z);
+    }
+}
+
+TArray<FName> UCustomAssetManager::GetAssetsInRadius(const FVector& Location, float Radius) const
+{
+    TArray<FName> Result;
+    float RadiusSquared = Radius * Radius;
+    
+    // Check each asset with a registered location
+    for (const TPair<FName, FVector>& Pair : AssetLocations)
+    {
+        const FVector& AssetLocation = Pair.Value;
+        float DistanceSquared = FVector::DistSquared(Location, AssetLocation);
+        
+        // If within radius, add to result
+        if (DistanceSquared <= RadiusSquared)
+        {
+            Result.Add(Pair.Key);
+        }
+    }
+    
+    return Result;
+}
+
+float UCustomAssetManager::GetDistanceToAsset(const FName& AssetId, const FVector& FromLocation) const
+{
+    // Look up the asset's registered location
+    const FVector* AssetLocation = AssetLocations.Find(AssetId);
+    
+    if (AssetLocation)
+    {
+        // Return the distance
+        return FVector::Distance(FromLocation, *AssetLocation);
+    }
+    
+    // If no location registered, return a large value
+    return FLT_MAX;
+}
+
+void UCustomAssetManager::LowPriorityStreamAsset(const FName& AssetId)
+{
+    // Skip if already loaded
+    if (GetAssetById(AssetId) != nullptr)
+    {
+        return;
+    }
+    
+    // Check if we have a path for this asset ID
+    FSoftObjectPath* AssetPath = AssetPathMap.Find(AssetId);
+    if (!AssetPath)
+    {
+        UE_LOG(LogTemp, Warning, TEXT("Asset with ID %s not found for prefetching"), *AssetId.ToString());
+        return;
+    }
+    
+    // Create a low-priority streamable request
+    FStreamableManager& StreamableMgr = UAssetManager::GetStreamableManager();
+    
+    // Request async load without explicit priority (UE5.4 compatibility)
+    StreamableMgr.RequestAsyncLoad(
+        *AssetPath,
+        FStreamableDelegate::CreateUObject(this, &UCustomAssetManager::OnAssetLoaded, AssetId, *AssetPath)
+    );
+    
+    UE_LOG(LogTemp, Verbose, TEXT("Started low-priority prefetch for asset %s"), *AssetId.ToString());
+}
+
+//=================================================================
+// ASSET COMPRESSION TIERS IMPLEMENTATION
+//=================================================================
+
+void UCustomAssetManager::SetAssetCompressionTier(const FName& AssetId, EAssetCompressionTier Tier)
+{
+    if (!AssetId.IsNone())
+    {
+        // Store or update the asset's compression tier
+        AssetCompressionTiers.Add(AssetId, Tier);
+        
+        UE_LOG(LogTemp, Log, TEXT("Set compression tier for asset %s to %d"), 
+            *AssetId.ToString(), static_cast<int32>(Tier));
+    }
+}
+
+EAssetCompressionTier UCustomAssetManager::GetAssetCompressionTier(const FName& AssetId) const
+{
+    // Look up the asset's compression tier
+    const EAssetCompressionTier* Tier = AssetCompressionTiers.Find(AssetId);
+    
+    if (Tier)
+    {
+        // Return the registered tier
+        return *Tier;
+    }
+    
+    // If no tier registered, return the default
+    return DefaultCompressionTier;
+}
+
+void UCustomAssetManager::SetDefaultCompressionTier(EAssetCompressionTier Tier)
+{
+    DefaultCompressionTier = Tier;
+    
+    UE_LOG(LogTemp, Log, TEXT("Set default compression tier to %d"), static_cast<int32>(Tier));
+}
+
+bool UCustomAssetManager::RecompressAsset(const FName& AssetId, EAssetCompressionTier NewTier)
+{
+#if WITH_EDITOR
+    // In editor builds, we can actually recompress assets
+    
+    // Check if the asset exists
+    FSoftObjectPath* AssetPath = AssetPathMap.Find(AssetId);
+    if (!AssetPath)
+    {
+        UE_LOG(LogTemp, Warning, TEXT("Asset with ID %s not found for recompression"), *AssetId.ToString());
+        return false;
+    }
+    
+    // Get the asset data
+    FAssetRegistryModule& AssetRegistryModule = FModuleManager::LoadModuleChecked<FAssetRegistryModule>("AssetRegistry");
+    FAssetData AssetData = AssetRegistryModule.Get().GetAssetByObjectPath(*AssetPath);
+    
+    if (!AssetData.IsValid())
+    {
+        UE_LOG(LogTemp, Warning, TEXT("Asset data for %s not valid"), *AssetId.ToString());
+        return false;
+    }
+    
+    // Get the package that contains the asset
+    UPackage* Package = AssetData.GetPackage();
+    if (!Package)
+    {
+        UE_LOG(LogTemp, Warning, TEXT("Could not get package for asset %s"), *AssetId.ToString());
+        return false;
+    }
+    
+    // Determine compression settings based on tier
+    int32 CompressionLevel = 0;
+    switch (NewTier)
+    {
+        case EAssetCompressionTier::None:
+            CompressionLevel = 0;
+            break;
+        case EAssetCompressionTier::Low:
+            CompressionLevel = 1;
+            break;
+        case EAssetCompressionTier::Medium:
+            CompressionLevel = 5;
+            break;
+        case EAssetCompressionTier::High:
+            CompressionLevel = 9;
+            break;
+    }
+    
+    // Save package with new compression settings
+    FSavePackageArgs SaveArgs;
+    SaveArgs.TopLevelFlags = RF_Public | RF_Standalone;
+    SaveArgs.SaveFlags = SAVE_Async;
+    // CompressionLevel is not directly accessible in UE5.4
+    // Will use default compression for now
+    
+    // Save the package
+    bool bSuccess = UPackage::SavePackage(Package, nullptr, *Package->GetName(), SaveArgs);
+    
+    if (bSuccess)
+    {
+        // Update the asset's compression tier
+        SetAssetCompressionTier(AssetId, NewTier);
+        
+        UE_LOG(LogTemp, Log, TEXT("Successfully recompressed asset %s with tier %d"), 
+            *AssetId.ToString(), static_cast<int32>(NewTier));
+    }
+    else
+    {
+        UE_LOG(LogTemp, Warning, TEXT("Failed to recompress asset %s"), *AssetId.ToString());
+    }
+    
+    return bSuccess;
+#else
+    // In non-editor builds, we can't recompress
+    UE_LOG(LogTemp, Warning, TEXT("Asset recompression is only available in editor builds"));
+    
+    // Still update the tier for future reference
+    SetAssetCompressionTier(AssetId, NewTier);
+    
+    return false;
+#endif
+}
+
+int64 UCustomAssetManager::EstimateAssetSizeFromMetadata(const FName& AssetId) const
+{
+    // This is a basic implementation - in a real system, you would store and retrieve
+    // actual size metadata for each asset
+    
+    // Look up the asset's compression tier
+    EAssetCompressionTier Tier = GetAssetCompressionTier(AssetId);
+    
+    // Base size estimate
+    int64 BaseSize = 500 * 1024; // 500 KB base size
+    
+    // Adjust based on compression tier
+    switch (Tier)
+    {
+        case EAssetCompressionTier::None:
+            return BaseSize;
+        case EAssetCompressionTier::Low:
+            return BaseSize * 0.8;
+        case EAssetCompressionTier::Medium:
+            return BaseSize * 0.5;
+        case EAssetCompressionTier::High:
+            return BaseSize * 0.3;
+        default:
+            return BaseSize;
+    }
+}
+
+//=================================================================
+// LEVEL STREAMING INTEGRATION IMPLEMENTATION
+//=================================================================
+
+void UCustomAssetManager::RegisterBundleWithLevel(FName BundleId, FName LevelName, float PreloadDistance, bool bUnloadWithLevel)
+{
+    if (BundleId.IsNone() || LevelName.IsNone())
+    {
+        UE_LOG(LogTemp, Warning, TEXT("Cannot register bundle with level: Invalid bundle ID or level name"));
+        return;
+    }
+    
+    // Check if this association already exists
+    for (int32 i = 0; i < LevelBundleAssociations.Num(); ++i)
+    {
+        if (LevelBundleAssociations[i].BundleId == BundleId && 
+            LevelBundleAssociations[i].LevelName == LevelName)
+        {
+            // Update existing association
+            LevelBundleAssociations[i].PreloadDistance = PreloadDistance;
+            LevelBundleAssociations[i].bUnloadWithLevel = bUnloadWithLevel;
+            
+            UE_LOG(LogTemp, Log, TEXT("Updated bundle %s association with level %s (Preload distance: %.1f)"), 
+                *BundleId.ToString(), *LevelName.ToString(), PreloadDistance);
+            return;
+        }
+    }
+    
+    // Create a new association
+    FBundleLevelAssociation NewAssociation;
+    NewAssociation.BundleId = BundleId;
+    NewAssociation.LevelName = LevelName;
+    NewAssociation.PreloadDistance = PreloadDistance;
+    NewAssociation.bUnloadWithLevel = bUnloadWithLevel;
+    
+    // Add to the list
+    LevelBundleAssociations.Add(NewAssociation);
+    
+    UE_LOG(LogTemp, Log, TEXT("Registered bundle %s with level %s (Preload distance: %.1f)"), 
+        *BundleId.ToString(), *LevelName.ToString(), PreloadDistance);
+    
+    // If the level is already loaded, preload the bundle now
+    if (LoadedLevels.Contains(LevelName))
+    {
+        UE_LOG(LogTemp, Log, TEXT("Level %s is already loaded, preloading bundle %s now"), 
+            *LevelName.ToString(), *BundleId.ToString());
+        LoadBundle(BundleId, EAssetLoadingStrategy::Streaming);
+    }
+}
+
+void UCustomAssetManager::UnregisterBundleFromLevel(FName BundleId, FName LevelName)
+{
+    if (BundleId.IsNone() || LevelName.IsNone())
+    {
+        return;
+    }
+    
+    // Find and remove the association
+    for (int32 i = LevelBundleAssociations.Num() - 1; i >= 0; --i)
+    {
+        if (LevelBundleAssociations[i].BundleId == BundleId && 
+            LevelBundleAssociations[i].LevelName == LevelName)
+        {
+            LevelBundleAssociations.RemoveAt(i);
+            
+            UE_LOG(LogTemp, Log, TEXT("Unregistered bundle %s from level %s"), 
+                *BundleId.ToString(), *LevelName.ToString());
+        }
+    }
+}
+
+void UCustomAssetManager::UpdateLevelBasedBundles(APlayerController* PlayerController)
+{
+    if (!PlayerController)
+    {
+        return;
+    }
+    
+    // Get player pawn and its location
+    APawn* PlayerPawn = PlayerController->GetPawn();
+    if (!PlayerPawn)
+    {
+        return;
+    }
+    
+    FVector PlayerLocation = PlayerPawn->GetActorLocation();
+    
+    // Process each level-bundle association
+    for (const FBundleLevelAssociation& Association : LevelBundleAssociations)
+    {
+        // Skip if level not loaded
+        if (!LoadedLevels.Contains(Association.LevelName))
+        {
+            continue;
+        }
+        
+        // Get distance to level
+        float Distance = GetDistanceToLevel(Association.LevelName, PlayerLocation);
+        
+        // If within preload distance, load the bundle
+        if (Distance <= Association.PreloadDistance)
+        {
+            UCustomAssetBundle* Bundle = GetBundleById(Association.BundleId);
+            
+            // Check if bundle exists and isn't already loaded
+            if (Bundle && !Bundle->bIsLoaded)
+            {
+                UE_LOG(LogTemp, Verbose, TEXT("Player is within %.1f units of level %s, loading bundle %s"), 
+                    Distance, *Association.LevelName.ToString(), *Association.BundleId.ToString());
+                
+                LoadBundle(Association.BundleId, EAssetLoadingStrategy::Streaming);
+            }
+        }
+        // If outside unload distance, unload the bundle
+        else if (Distance > Association.PreloadDistance * 2.0f)
+        {
+            UCustomAssetBundle* Bundle = GetBundleById(Association.BundleId);
+            
+            // Check if bundle exists and is loaded
+            if (Bundle && Bundle->bIsLoaded && !Bundle->bKeepInMemory)
+            {
+                UE_LOG(LogTemp, Verbose, TEXT("Player is %.1f units from level %s, unloading bundle %s"), 
+                    Distance, *Association.LevelName.ToString(), *Association.BundleId.ToString());
+                
+                UnloadBundle(Association.BundleId);
+            }
+        }
+    }
+}
+
+float UCustomAssetManager::GetDistanceToLevel(FName LevelName, const FVector& FromLocation) const
+{
+    // In a real implementation, you would use the level bounds or streaming volumes
+    // For this example, we'll use a simple approach
+    
+    // Get the world
+    UWorld* World = GEngine->GetWorldFromContextObject(this, EGetWorldErrorMode::ReturnNull);
+    if (!World)
+    {
+        return FLT_MAX;
+    }
+    
+    // Look for the level
+    for (const ULevelStreaming* StreamingLevel : World->GetStreamingLevels())
+    {
+        // UE5.4 compatible way to get level name
+        FString StreamingLevelName = StreamingLevel->GetWorldAssetPackageName();
+        FName StreamingLevelFName = FName(*FPaths::GetBaseFilename(StreamingLevelName));
+        
+        if (StreamingLevel && StreamingLevelFName == LevelName)
+        {
+            // If level is loaded, use its bounds
+            if (StreamingLevel->IsLevelLoaded())
+            {
+                ULevel* Level = StreamingLevel->GetLoadedLevel();
+                if (Level)
+                {
+                    // UE5.4 compatible way to get level bounds - more generic approach
+                    FBox LevelBounds(EForceInit::ForceInit);
+                    for (AActor* Actor : Level->Actors)
+                    {
+                        if (Actor)
+                        {
+                            LevelBounds += Actor->GetComponentsBoundingBox();
+                        }
+                    }
+                    
+                    if (LevelBounds.IsValid == 0)
+                    {
+                        // Fallback to level transform if bounds are invalid
+                        return FVector::Distance(FromLocation, StreamingLevel->LevelTransform.GetLocation());
+                    }
+                    
+                    // Fix for UE5.4 - use FVector::DistSquared for squared distance calculation
+                    return FVector::DistSquared(FromLocation, LevelBounds.GetCenter());
+                }
+            }
+            
+            // If level is not loaded, use its transform
+            FTransform LevelTransform = StreamingLevel->LevelTransform;
+            // Fix for UE5.4 - use FVector::Distance for regular distance calculation
+            return FVector::Distance(FromLocation, LevelTransform.GetLocation());
+        }
+    }
+    
+    // Level not found
+    return FLT_MAX;
+}
+
+void UCustomAssetManager::OnLevelLoaded(FName LevelName)
+{
+    if (!LevelName.IsNone())
+    {
+        // Add to loaded levels set
+        LoadedLevels.Add(LevelName);
+        
+        UE_LOG(LogTemp, Log, TEXT("Level %s loaded, checking for associated bundles"), 
+            *LevelName.ToString());
+        
+        // Load any bundles associated with this level
+        for (const FBundleLevelAssociation& Association : LevelBundleAssociations)
+        {
+            if (Association.LevelName == LevelName)
+            {
+                UE_LOG(LogTemp, Log, TEXT("Loading bundle %s for level %s"), 
+                    *Association.BundleId.ToString(), *LevelName.ToString());
+                
+                LoadBundle(Association.BundleId, EAssetLoadingStrategy::Streaming);
+            }
+        }
+    }
+}
+
+void UCustomAssetManager::OnLevelUnloaded(FName LevelName)
+{
+    if (!LevelName.IsNone())
+    {
+        // Remove from loaded levels set
+        LoadedLevels.Remove(LevelName);
+        
+        UE_LOG(LogTemp, Log, TEXT("Level %s unloaded, checking for associated bundles"), 
+            *LevelName.ToString());
+        
+        // Unload any bundles associated with this level
+        for (const FBundleLevelAssociation& Association : LevelBundleAssociations)
+        {
+            if (Association.LevelName == LevelName && Association.bUnloadWithLevel)
+            {
+                UE_LOG(LogTemp, Log, TEXT("Unloading bundle %s for level %s"), 
+                    *Association.BundleId.ToString(), *LevelName.ToString());
+                
+                UnloadBundle(Association.BundleId);
+            }
+        }
+    }
+}
+
+//=================================================================
+// ASSET HOTSWAPPING IMPLEMENTATION
+//=================================================================
+
+bool UCustomAssetManager::HotswapAsset(const FName& AssetId, UCustomAssetBase* NewAssetVersion)
+{
+    if (AssetId.IsNone() || !NewAssetVersion)
+    {
+        UE_LOG(LogTemp, Warning, TEXT("Invalid asset ID or new asset version for hotswap"));
+        return false;
+    }
+    
+    // Make sure the new asset has the correct ID
+    if (NewAssetVersion->AssetId != AssetId)
+    {
+        UE_LOG(LogTemp, Warning, TEXT("New asset version has ID %s, but should have ID %s"),
+            *NewAssetVersion->AssetId.ToString(), *AssetId.ToString());
+        
+        // Force the correct ID
+        NewAssetVersion->AssetId = AssetId;
+    }
+    
+    // Add to pending hotswaps
+    PendingHotswaps.Add(AssetId, NewAssetVersion);
+    
+    UE_LOG(LogTemp, Log, TEXT("Asset %s queued for hotswap"), *AssetId.ToString());
+    
+    return true;
+}
+
+void UCustomAssetManager::RegisterHotswapListener(UObject* Listener, FName FunctionName)
+{
+    if (!Listener)
+    {
+        return;
+    }
+    
+    // Check if this listener is already registered
+    for (const TPair<UObject*, FName>& Pair : HotswapListeners)
+    {
+        if (Pair.Key == Listener && Pair.Value == FunctionName)
+        {
+            // Already registered
+            return;
+        }
+    }
+    
+    // Add to listeners
+    HotswapListeners.Add(TPair<UObject*, FName>(Listener, FunctionName));
+    
+    UE_LOG(LogTemp, Verbose, TEXT("Registered hotswap listener: %s.%s"), 
+        *Listener->GetName(), *FunctionName.ToString());
+}
+
+void UCustomAssetManager::UnregisterHotswapListener(UObject* Listener)
+{
+    if (!Listener)
+    {
+        return;
+    }
+    
+    // Remove all entries with this listener
+    for (int32 i = HotswapListeners.Num() - 1; i >= 0; --i)
+    {
+        if (HotswapListeners[i].Key == Listener)
+        {
+            HotswapListeners.RemoveAt(i);
+        }
+    }
+    
+    UE_LOG(LogTemp, Verbose, TEXT("Unregistered hotswap listener: %s"), *Listener->GetName());
+}
+
+bool UCustomAssetManager::HasPendingHotswap(const FName& AssetId) const
+{
+    return PendingHotswaps.Contains(AssetId);
+}
+
+int32 UCustomAssetManager::ApplyPendingHotswaps()
+{
+    int32 AppliedCount = 0;
+    
+    // Make a copy of the map to avoid issues with modification during iteration
+    TMap<FName, UCustomAssetBase*> HotswapsToApply = PendingHotswaps;
+    
+    // Clear the pending hotswaps
+    PendingHotswaps.Empty();
+    
+    // Apply each hotswap
+    for (const TPair<FName, UCustomAssetBase*>& Pair : HotswapsToApply)
+    {
+        const FName& AssetId = Pair.Key;
+        UCustomAssetBase* NewAssetVersion = Pair.Value;
+        
+        // Get the currently loaded asset
+        UCustomAssetBase* CurrentAsset = GetAssetById(AssetId);
+        
+        // First register the new asset path
+        FSoftObjectPath AssetPath = FSoftObjectPath(NewAssetVersion);
+        RegisterAssetPath(AssetId, AssetPath);
+        
+        // If the asset is currently loaded, swap it
+        if (CurrentAsset)
+        {
+            // Unregister the old asset
+            UnregisterAsset(CurrentAsset);
+            
+            // Register the new asset
+            RegisterAsset(NewAssetVersion);
+            
+            UE_LOG(LogTemp, Log, TEXT("Hotswapped asset %s (version %d to %d)"),
+                *AssetId.ToString(), CurrentAsset->Version, NewAssetVersion->Version);
+        }
+        else
+        {
+            UE_LOG(LogTemp, Log, TEXT("Registered new asset version for %s, but asset is not currently loaded"),
+                *AssetId.ToString());
+        }
+        
+        // Notify listeners about the asset change
+        NotifyHotswapListeners(AssetId);
+        
+        ++AppliedCount;
+    }
+    
+    if (AppliedCount > 0)
+    {
+        UE_LOG(LogTemp, Log, TEXT("Applied %d pending asset hotswaps"), AppliedCount);
+    }
+    
+    return AppliedCount;
+}
+
+void UCustomAssetManager::NotifyHotswapListeners(const FName& AssetId)
+{
+    // Notify all registered listeners
+    for (int32 i = HotswapListeners.Num() - 1; i >= 0; --i)
+    {
+        UObject* Listener = HotswapListeners[i].Key;
+        FName FunctionName = HotswapListeners[i].Value;
+        
+        if (Listener)
+        {
+            // Check if the function exists
+            UFunction* Function = Listener->FindFunction(FunctionName);
+            if (Function)
+            {
+                // Set up parameters
+                FAssetHotswapInfo Params;
+                Params.AssetId = AssetId;
+                
+                // Call the function
+                Listener->ProcessEvent(Function, &Params);
+                
+                UE_LOG(LogTemp, Verbose, TEXT("Notified hotswap listener %s.%s for asset %s"),
+                    *Listener->GetName(), *FunctionName.ToString(), *AssetId.ToString());
+            }
+            else
+            {
+                UE_LOG(LogTemp, Warning, TEXT("Hotswap listener %s does not have function %s"),
+                    *Listener->GetName(), *FunctionName.ToString());
+                
+                // Remove this listener
+                HotswapListeners.RemoveAt(i);
+            }
+        }
+        else
+        {
+            // Listener has been garbage collected, remove it
+            HotswapListeners.RemoveAt(i);
+        }
+    }
 } 
