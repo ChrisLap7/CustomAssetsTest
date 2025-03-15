@@ -10,6 +10,10 @@
 #include "UObject/Package.h"
 #include "UObject/SavePackage.h"
 #include "Algo/Reverse.h"
+#if WITH_EDITOR
+#include "ObjectTools.h"
+#include "AssetRegistry/AssetRegistryModule.h"
+#endif
 
 UCustomAssetManager::UCustomAssetManager()
 {
@@ -406,6 +410,38 @@ void UCustomAssetManager::RegisterAsset(UCustomAssetBase* Asset)
         int64 MemoryUsage = EstimateAssetMemoryUsage(Asset);
         MemoryTracker->TrackAsset(Asset->AssetId, MemoryUsage);
     }
+}
+
+void UCustomAssetManager::RegisterAssetPath(const FName& AssetId, const FSoftObjectPath& AssetPath)
+{
+    if (AssetId.IsNone() || !AssetPath.IsValid())
+    {
+        UE_LOG(LogTemp, Warning, TEXT("Cannot register invalid asset path for ID: %s"), 
+            *AssetId.ToString());
+        return;
+    }
+
+    // Check if the asset is already loaded
+    if (LoadedAssets.Contains(AssetId))
+    {
+        UE_LOG(LogTemp, Warning, TEXT("Asset %s is already loaded, no need to register its path"), 
+            *AssetId.ToString());
+        return;
+    }
+
+    // Check if we already have a path for this asset ID
+    if (AssetPathMap.Contains(AssetId))
+    {
+        UE_LOG(LogTemp, Warning, TEXT("Updating path for asset %s from %s to %s"), 
+            *AssetId.ToString(), 
+            *AssetPathMap[AssetId].ToString(),
+            *AssetPath.ToString());
+    }
+
+    // Add or update the path in the asset path map
+    AssetPathMap.Add(AssetId, AssetPath);
+    UE_LOG(LogTemp, Log, TEXT("Registered asset path %s for ID %s"), 
+        *AssetPath.ToString(), *AssetId.ToString());
 }
 
 void UCustomAssetManager::UnregisterAsset(UCustomAssetBase* Asset)
@@ -1077,15 +1113,36 @@ bool UCustomAssetManager::SaveBundle(UCustomAssetBundle* Bundle, const FString& 
         return false;
     }
     
+    // Log the initial bundle state for debugging
+    FName OriginalBundleId = Bundle->BundleId;
+    FString OriginalDisplayName = Bundle->DisplayName.ToString();
+    UE_LOG(LogTemp, Warning, TEXT("SaveBundle: Starting save for bundle - ID: %s, Display Name: %s"), 
+        *OriginalBundleId.ToString(), *OriginalDisplayName);
+    
     // Make sure the bundle has a valid ID
-    if (Bundle->BundleId.IsNone())
+    if (OriginalBundleId.IsNone())
     {
+        UE_LOG(LogTemp, Warning, TEXT("SaveBundle: Cannot save bundle with None ID, generating a new ID"));
+        // Generate a new ID before saving
         FGuid NewGuid = FGuid::NewGuid();
         Bundle->BundleId = FName(*NewGuid.ToString());
+        OriginalBundleId = Bundle->BundleId; // Update our cached ID
+        UE_LOG(LogTemp, Warning, TEXT("SaveBundle: Generated new ID: %s"), *OriginalBundleId.ToString());
     }
     
+    // Make sure the bundle has a valid display name - CRITICAL
+    if (Bundle->DisplayName.IsEmpty())
+    {
+        UE_LOG(LogTemp, Warning, TEXT("SaveBundle: Bundle has empty display name, using ID as display name"));
+        Bundle->DisplayName = FText::FromString(OriginalDisplayName.IsEmpty() ? TEXT("New Bundle") : OriginalDisplayName);
+        OriginalDisplayName = Bundle->DisplayName.ToString(); // Update our cached display name
+    }
+    
+    // Store the original DisplayName explicitly to preserve it
+    FText PreservedDisplayName = Bundle->DisplayName;
+    
     // Create a unique package name for the bundle
-    FString BundleName = Bundle->BundleId.ToString();
+    FString BundleName = OriginalBundleId.ToString();
     FString FullPackagePath = PackagePath.IsEmpty() ? 
         FString::Printf(TEXT("/Game/Bundles/%s"), *BundleName) : 
         FString::Printf(TEXT("%s/%s"), *PackagePath, *BundleName);
@@ -1094,11 +1151,14 @@ bool UCustomAssetManager::SaveBundle(UCustomAssetBundle* Bundle, const FString& 
     FullPackagePath = FullPackagePath.Replace(TEXT("-"), TEXT("_"));
     BundleName = BundleName.Replace(TEXT("-"), TEXT("_"));
     
+    UE_LOG(LogTemp, Log, TEXT("SaveBundle: Creating package at path: %s, preserving display name: %s"), 
+           *FullPackagePath, *PreservedDisplayName.ToString());
+    
     // Create a new package for the bundle
     UPackage* Package = CreatePackage(*FullPackagePath);
     if (!Package)
     {
-        UE_LOG(LogTemp, Error, TEXT("Failed to create package for bundle %s"), *Bundle->BundleId.ToString());
+        UE_LOG(LogTemp, Error, TEXT("SaveBundle: Failed to create package for bundle %s"), *OriginalBundleId.ToString());
         return false;
     }
     
@@ -1108,21 +1168,18 @@ bool UCustomAssetManager::SaveBundle(UCustomAssetBundle* Bundle, const FString& 
     UCustomAssetBundle* SavedBundle = NewObject<UCustomAssetBundle>(Package, FName(*BundleName), RF_Public | RF_Standalone);
     if (!SavedBundle)
     {
-        UE_LOG(LogTemp, Error, TEXT("Failed to create saved bundle object %s"), *Bundle->BundleId.ToString());
+        UE_LOG(LogTemp, Error, TEXT("SaveBundle: Failed to create saved bundle object %s"), *OriginalBundleId.ToString());
         return false;
     }
     
     // Copy the properties from the in-memory bundle to the saved bundle
-    SavedBundle->BundleId = Bundle->BundleId;
+    // CRITICAL: Make sure to preserve the bundle ID
+    SavedBundle->BundleId = OriginalBundleId;
+    UE_LOG(LogTemp, Log, TEXT("SaveBundle: Set SavedBundle ID to: %s"), *SavedBundle->BundleId.ToString());
     
-    if (!Bundle->DisplayName.IsEmpty())
-    {
-        SavedBundle->DisplayName = Bundle->DisplayName;
-    }
-    else
-    {
-        SavedBundle->DisplayName = FText::FromName(Bundle->BundleId);
-    }
+    // CRITICAL: Make sure to preserve the original display name
+    SavedBundle->DisplayName = PreservedDisplayName;
+    UE_LOG(LogTemp, Log, TEXT("SaveBundle: Set SavedBundle display name to: %s"), *SavedBundle->DisplayName.ToString());
     
     SavedBundle->Description = Bundle->Description;
     SavedBundle->bPreloadAtStartup = Bundle->bPreloadAtStartup;
@@ -1139,7 +1196,40 @@ bool UCustomAssetManager::SaveBundle(UCustomAssetBundle* Bundle, const FString& 
         }
     }
     
+    // Ensure we're preserving all loaded assets too
+    if (Bundle->Assets.Num() > 0)
+    {
+        SavedBundle->Assets.Empty(Bundle->Assets.Num());
+        for (UCustomAssetBase* Asset : Bundle->Assets)
+        {
+            if (Asset && !Asset->AssetId.IsNone())
+            {
+                SavedBundle->Assets.Add(Asset);
+                
+                // Make sure the Asset ID is also in the AssetIds array
+                if (!SavedBundle->AssetIds.Contains(Asset->AssetId))
+                {
+                    SavedBundle->AssetIds.Add(Asset->AssetId);
+                }
+            }
+        }
+    }
+    
     SavedBundle->bIsLoaded = false; // Don't save loaded state
+    
+    // Validate the saved bundle before saving
+    if (SavedBundle->BundleId.IsNone())
+    {
+        UE_LOG(LogTemp, Error, TEXT("SaveBundle: Critical error - SavedBundle ID is None before saving! Restoring original ID"));
+        SavedBundle->BundleId = OriginalBundleId;
+    }
+    
+    // Double-check the display name is preserved
+    if (SavedBundle->DisplayName.IsEmpty())
+    {
+        UE_LOG(LogTemp, Error, TEXT("SaveBundle: Critical error - SavedBundle DisplayName is empty before saving! Restoring preserved name"));
+        SavedBundle->DisplayName = PreservedDisplayName;
+    }
     
     // Mark the package as dirty
     Package->MarkPackageDirty();
@@ -1157,23 +1247,39 @@ bool UCustomAssetManager::SaveBundle(UCustomAssetBundle* Bundle, const FString& 
     
     if (bSuccess)
     {
-        UE_LOG(LogTemp, Log, TEXT("Successfully saved bundle %s to %s"), *Bundle->BundleId.ToString(), *FullPackagePath);
+        UE_LOG(LogTemp, Log, TEXT("SaveBundle: Successfully saved bundle %s to %s"), *SavedBundle->BundleId.ToString(), *FullPackagePath);
+        
+        // Validate the saved bundle ID again after saving
+        if (SavedBundle->BundleId.IsNone())
+        {
+            UE_LOG(LogTemp, Error, TEXT("SaveBundle: Critical error - SavedBundle ID is None after saving! Restoring original ID"));
+            SavedBundle->BundleId = OriginalBundleId;
+        }
         
         // Replace the in-memory bundle with the saved bundle in our map
         // Check if the bundle exists in our map first
-        if (Bundles.Contains(Bundle->BundleId))
+        if (Bundles.Contains(OriginalBundleId))
         {
-            Bundles[Bundle->BundleId] = SavedBundle;
+            UE_LOG(LogTemp, Log, TEXT("SaveBundle: Updating existing bundle in Bundles map"));
+            Bundles[OriginalBundleId] = SavedBundle;
         }
         else
         {
             // If not in the map, add it
-            Bundles.Add(Bundle->BundleId, SavedBundle);
+            UE_LOG(LogTemp, Log, TEXT("SaveBundle: Adding new bundle to Bundles map"));
+            Bundles.Add(SavedBundle->BundleId, SavedBundle);
+        }
+        
+        // Make sure we're not losing our display name after the save
+        if (SavedBundle->DisplayName.IsEmpty() && !PreservedDisplayName.IsEmpty())
+        {
+            UE_LOG(LogTemp, Warning, TEXT("SaveBundle: SavedBundle lost its display name, restoring from preserved name"));
+            SavedBundle->DisplayName = PreservedDisplayName;
         }
     }
     else
     {
-        UE_LOG(LogTemp, Error, TEXT("Failed to save bundle %s to %s"), *Bundle->BundleId.ToString(), *FullPackagePath);
+        UE_LOG(LogTemp, Error, TEXT("SaveBundle: Failed to save bundle %s to %s"), *OriginalBundleId.ToString(), *FullPackagePath);
     }
     
     return bSuccess;
@@ -1201,4 +1307,172 @@ int32 UCustomAssetManager::SaveAllBundles(const FString& BasePath)
     UE_LOG(LogTemp, Log, TEXT("Saved %d/%d bundles to %s"), SuccessCount, AllBundles.Num(), *SavePath);
     
     return SuccessCount;
+}
+
+bool UCustomAssetManager::DeleteBundle(const FName& BundleId)
+{
+    // Log entry for debugging
+    UE_LOG(LogTemp, Log, TEXT("DeleteBundle: Attempting to delete bundle with ID: %s"), *BundleId.ToString());
+    
+    // Special handling for None IDs - search for bundles with None ID
+    if (BundleId.IsNone())
+    {
+        UE_LOG(LogTemp, Warning, TEXT("DeleteBundle: Attempting to delete bundle with None ID"));
+        
+        // Find all bundles with None ID (this is an error condition but we'll try to recover)
+        TArray<UCustomAssetBundle*> BundlesToDelete;
+        for (const TPair<FName, UCustomAssetBundle*>& Pair : Bundles)
+        {
+            if (Pair.Key.IsNone() || (Pair.Value && Pair.Value->BundleId.IsNone()))
+            {
+                BundlesToDelete.Add(Pair.Value);
+            }
+        }
+        
+        if (BundlesToDelete.Num() == 0)
+        {
+            UE_LOG(LogTemp, Warning, TEXT("DeleteBundle: No bundles with None ID found"));
+            return false;
+        }
+        
+        // Remove all these problematic bundles
+        for (UCustomAssetBundle* Bundle : BundlesToDelete)
+        {
+            if (Bundle)
+            {
+                UE_LOG(LogTemp, Warning, TEXT("DeleteBundle: Removing bundle with None ID from memory"));
+                Bundles.Remove(FName());  // Remove the None key
+                // We can't delete the asset file because we don't know its path
+            }
+        }
+        
+        return true;
+    }
+
+    // Normal case - find the bundle by ID
+    UCustomAssetBundle* Bundle = GetBundleById(BundleId);
+    if (!Bundle)
+    {
+        UE_LOG(LogTemp, Warning, TEXT("DeleteBundle: Bundle with ID %s not found"), *BundleId.ToString());
+        return false;
+    }
+
+    // Get the package path for the bundle
+    FString BundleName = BundleId.ToString().Replace(TEXT("-"), TEXT("_"));
+    FString PackagePath = FString::Printf(TEXT("/Game/Bundles/%s"), *BundleName);
+    
+    UE_LOG(LogTemp, Log, TEXT("DeleteBundle: Unregistering bundle %s"), *BundleId.ToString());
+    
+    // Unregister the bundle from the manager
+    UnregisterBundle(Bundle);
+    
+    // Delete the asset file from the content browser
+    bool bDeletedSuccessfully = false;
+    
+#if WITH_EDITOR
+    // In editor builds, use asset registry
+    FAssetRegistryModule& AssetRegistryModule = FModuleManager::LoadModuleChecked<FAssetRegistryModule>("AssetRegistry");
+    FAssetData AssetData = AssetRegistryModule.Get().GetAssetByObjectPath(FSoftObjectPath(PackagePath));
+    
+    if (AssetData.IsValid())
+    {
+        UE_LOG(LogTemp, Log, TEXT("DeleteBundle: Found asset data for %s, attempting to delete"), *BundleId.ToString());
+        TArray<UObject*> ObjectsToDelete;
+        UObject* Asset = AssetData.GetAsset();
+        if (Asset)
+        {
+            ObjectsToDelete.Add(Asset);
+            bDeletedSuccessfully = ObjectTools::DeleteObjects(ObjectsToDelete, false) > 0;
+        }
+        else
+        {
+            UE_LOG(LogTemp, Warning, TEXT("DeleteBundle: Got AssetData but failed to load asset for %s"), *BundleId.ToString());
+            bDeletedSuccessfully = true; // Consider it a success if the asset is already gone
+        }
+    }
+    else
+    {
+        UE_LOG(LogTemp, Warning, TEXT("DeleteBundle: No AssetData found for %s"), *BundleId.ToString());
+        bDeletedSuccessfully = true; // Consider it a success if the asset is already gone
+    }
+#else
+    // In non-editor builds, just unregister the bundle
+    bDeletedSuccessfully = true;
+#endif
+    
+    if (bDeletedSuccessfully)
+    {
+        UE_LOG(LogTemp, Log, TEXT("DeleteBundle: Successfully deleted bundle %s"), *BundleId.ToString());
+    }
+    else
+    {
+        UE_LOG(LogTemp, Error, TEXT("DeleteBundle: Failed to delete bundle %s"), *BundleId.ToString());
+    }
+    
+    return bDeletedSuccessfully;
+}
+
+bool UCustomAssetManager::RenameBundle(const FName& BundleId, const FString& NewName)
+{
+    // Find the bundle by ID
+    UCustomAssetBundle* Bundle = GetBundleById(BundleId);
+    if (!Bundle)
+    {
+        UE_LOG(LogTemp, Warning, TEXT("RenameBundle: Bundle with ID %s not found"), *BundleId.ToString());
+        return false;
+    }
+    
+    // Create a copy of the bundle with the new name/ID
+    UCustomAssetBundle* NewBundle = DuplicateObject<UCustomAssetBundle>(Bundle, GetTransientPackage());
+    if (!NewBundle)
+    {
+        UE_LOG(LogTemp, Error, TEXT("RenameBundle: Failed to duplicate bundle %s"), *BundleId.ToString());
+        return false;
+    }
+    
+    // Update the bundle's name properties
+    NewBundle->DisplayName = FText::FromString(NewName);
+    
+    // Generate a new bundle ID using GUID (or use the name if preferred)
+    FGuid NewGuid = FGuid::NewGuid();
+    FName NewBundleId = FName(*NewGuid.ToString());
+    NewBundle->BundleId = NewBundleId;
+    
+    UE_LOG(LogTemp, Log, TEXT("Renaming bundle from %s to %s (new ID: %s)"), 
+        *BundleId.ToString(), *NewName, *NewBundleId.ToString());
+    
+    // Copy all assets from old bundle to new bundle
+    NewBundle->AssetIds.Empty();
+    for (const FName& AssetId : Bundle->AssetIds)
+    {
+        if (!AssetId.IsNone())
+        {
+            NewBundle->AssetIds.Add(AssetId);
+        }
+    }
+    
+    // Register the new bundle
+    RegisterBundle(NewBundle);
+    
+    // Save the new bundle
+    if (!SaveBundle(NewBundle, TEXT("/Game/Bundles")))
+    {
+        UE_LOG(LogTemp, Error, TEXT("RenameBundle: Failed to save new bundle %s"), *NewBundleId.ToString());
+        
+        // Clean up on failure
+        UnregisterBundle(NewBundle);
+        return false;
+    }
+    
+    // Delete the old bundle
+    bool bDeleteResult = DeleteBundle(BundleId);
+    if (!bDeleteResult)
+    {
+        UE_LOG(LogTemp, Warning, TEXT("RenameBundle: Failed to delete old bundle %s, but new bundle was created"), 
+            *BundleId.ToString());
+        // Continue with success even if old deletion failed
+    }
+    
+    UE_LOG(LogTemp, Log, TEXT("Successfully renamed bundle from %s to %s"), *BundleId.ToString(), *NewBundleId.ToString());
+    return true;
 } 

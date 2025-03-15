@@ -472,9 +472,53 @@ TSharedRef<SDockTab> SCustomAssetManagerEditorWindow::SpawnBundleTab(const FSpaw
                 ]
             ]
             +SVerticalBox::Slot()
+            .AutoHeight()
+            .Padding(FMargin(0, 0, 0, 8))
+            [
+                SNew(STextBlock)
+                .Text(LOCTEXT("BundleLocationInfo", "Bundles are saved to '/Game/Bundles' and can be accessed in your code with UCustomAssetManager::Get().GetBundleById()"))
+                .ColorAndOpacity(FLinearColor(0.5f, 0.5f, 1.0f, 1.0f))
+            ]
+            +SVerticalBox::Slot()
             .FillHeight(1.0f)
             [
-                BundleListView.ToSharedRef()
+                SNew(SBorder)
+                .BorderImage(FAppStyle::GetBrush("ToolPanel.GroupBorder"))
+                [
+                    SAssignNew(BundleListView, SListView<TSharedPtr<FBundleEntry>>)
+                    .ItemHeight(28)
+                    .ListItemsSource(&BundleEntries)
+                    .OnGenerateRow(this, &SCustomAssetManagerEditorWindow::GenerateBundleRow)
+                    .OnSelectionChanged(this, &SCustomAssetManagerEditorWindow::OnBundleSelectionChanged)
+                    .SelectionMode(ESelectionMode::Single)
+                    .HeaderRow
+                    (
+                        SNew(SHeaderRow)
+                        + SHeaderRow::Column("BundleId")
+                        .DefaultLabel(LOCTEXT("BundleIdColumn", "Bundle ID"))
+                        .FillWidth(0.2f)
+
+                        + SHeaderRow::Column("DisplayName")
+                        .DefaultLabel(LOCTEXT("DisplayNameColumn", "Display Name"))
+                        .FillWidth(0.2f)
+
+                        + SHeaderRow::Column("Assets")
+                        .DefaultLabel(LOCTEXT("AssetsColumn", "Assets"))
+                        .FillWidth(0.2f)
+
+                        + SHeaderRow::Column("Status")
+                        .DefaultLabel(LOCTEXT("StatusColumn", "Status"))
+                        .FillWidth(0.15f)
+
+                        + SHeaderRow::Column("Memory")
+                        .DefaultLabel(LOCTEXT("MemoryColumn", "Memory"))
+                        .FillWidth(0.1f)
+                        
+                        + SHeaderRow::Column("Actions")
+                        .DefaultLabel(LOCTEXT("ActionsColumn", "Actions"))
+                        .FillWidth(0.15f)
+                    )
+                ]
             ]
         ];
 }
@@ -1032,29 +1076,27 @@ TSharedRef<ITableRow> SCustomAssetManagerEditorWindow::GenerateBundleRow(TShared
         
         // Bundle ID
         + SHorizontalBox::Slot()
-        .AutoWidth()
+        .FillWidth(0.2f)
         .Padding(4, 0)
         .VAlign(VAlign_Center)
         [
             SNew(STextBlock)
             .Text(FText::FromString(Item->Bundle->BundleId.ToString()))
-            .MinDesiredWidth(120)
         ]
         
         // Name
         + SHorizontalBox::Slot()
-        .AutoWidth()
+        .FillWidth(0.2f)
         .Padding(4, 0)
         .VAlign(VAlign_Center)
         [
             SNew(STextBlock)
             .Text(Item->Bundle->DisplayName)
-            .MinDesiredWidth(150)
         ]
         
         // Asset Count
         + SHorizontalBox::Slot()
-        .AutoWidth()
+        .FillWidth(0.2f)
         .Padding(4, 0)
         .VAlign(VAlign_Center)
         [
@@ -1063,8 +1105,7 @@ TSharedRef<ITableRow> SCustomAssetManagerEditorWindow::GenerateBundleRow(TShared
             .AutoWidth()
             [
                 SNew(STextBlock)
-                .Text(FText::Format(LOCTEXT("AssetCountFormat", "{0} assets"), FText::AsNumber(Item->Bundle->Assets.Num())))
-                .MinDesiredWidth(80)
+                .Text(FText::Format(LOCTEXT("AssetCountFormat", "{0} assets"), FText::AsNumber(Item->Bundle->AssetIds.Num())))
             ]
             +SHorizontalBox::Slot()
             .AutoWidth()
@@ -1073,7 +1114,7 @@ TSharedRef<ITableRow> SCustomAssetManagerEditorWindow::GenerateBundleRow(TShared
                 SNew(SButton)
                 .Text(LOCTEXT("ViewAssetsButton", "View Assets"))
                 .ToolTipText(LOCTEXT("ViewAssetsTooltip", "View the assets in this bundle"))
-                .IsEnabled(Item->Bundle->Assets.Num() > 0)
+                .IsEnabled(Item->Bundle->AssetIds.Num() > 0)
                 .OnClicked_Lambda([this, Item]() {
                     // Show list of assets in this bundle
                     TSharedRef<SWindow> DialogWindow = SNew(SWindow)
@@ -1153,23 +1194,61 @@ TSharedRef<ITableRow> SCustomAssetManagerEditorWindow::GenerateBundleRow(TShared
         
         // Status
         + SHorizontalBox::Slot()
-        .AutoWidth()
+        .FillWidth(0.2f)
         .Padding(4, 0)
         .VAlign(VAlign_Center)
         [
             SNew(STextBlock)
             .Text(StatusText)
-            .ColorAndOpacity(Item->Bundle->bIsLoaded ? FLinearColor(0.0f, 0.8f, 0.0f) : FLinearColor(0.8f, 0.0f, 0.0f))
-            .MinDesiredWidth(80)
         ]
+        
+        // Memory
         + SHorizontalBox::Slot()
         .FillWidth(0.15f)
-        .Padding(5, 0)
+        .Padding(4, 0)
         .VAlign(VAlign_Center)
         [
             SNew(STextBlock)
             .Text(MemorySizeText)
-            .MinDesiredWidth(80)
+        ]
+        
+        // Bundle action buttons
+        + SHorizontalBox::Slot()
+        .FillWidth(0.15f)
+        .Padding(4, 0)
+        .VAlign(VAlign_Center)
+        [
+            SNew(SHorizontalBox)
+            // Rename Button
+            + SHorizontalBox::Slot()
+            .AutoWidth()
+            .Padding(2, 0)
+            [
+                SNew(SButton)
+                .ContentPadding(FMargin(4, 1))
+                .Text(LOCTEXT("RenameButton", "Rename"))
+                .ToolTipText(LOCTEXT("RenameButtonTooltip", "Rename this bundle"))
+                .OnClicked_Lambda([this, Item]()
+                {
+                    ShowRenameBundleDialog(Item->Bundle);
+                    return FReply::Handled();
+                })
+            ]
+            // Delete Button
+            + SHorizontalBox::Slot()
+            .AutoWidth()
+            .Padding(2, 0)
+            [
+                SNew(SButton)
+                .ContentPadding(FMargin(4, 1))
+                .Text(LOCTEXT("DeleteButton", "Delete"))
+                .ToolTipText(LOCTEXT("DeleteButtonTooltip", "Delete this bundle"))
+                .OnClicked_Lambda([this, Item]()
+                {
+                    ShowDeleteBundleDialog(Item->Bundle);
+                    return FReply::Handled();
+                })
+            ]
         ]
     ];
 }
@@ -1363,6 +1442,8 @@ FReply SCustomAssetManagerEditorWindow::OnCreateBundleClicked()
                         BundleName = FString::Printf(TEXT("Bundle_%s"), *FGuid::NewGuid().ToString());
                     }
                     
+                    UE_LOG(LogTemp, Log, TEXT("Creating new bundle with name: %s"), *BundleName);
+                    
                     // Create the bundle with a valid outer
                     UCustomAssetBundle* NewBundle = NewObject<UCustomAssetBundle>(GetTransientPackage());
                     if (!NewBundle)
@@ -1372,7 +1453,9 @@ FReply SCustomAssetManagerEditorWindow::OnCreateBundleClicked()
                     }
                     else
                     {
+                        // Set the display name first
                         NewBundle->DisplayName = FText::FromString(BundleName);
+                        UE_LOG(LogTemp, Log, TEXT("Set display name to: %s"), *NewBundle->DisplayName.ToString());
                         
                         // Always generate a new GUID to ensure uniqueness
                         FGuid BundleGuid = FGuid::NewGuid();
@@ -1386,7 +1469,9 @@ FReply SCustomAssetManagerEditorWindow::OnCreateBundleClicked()
                             NewBundle->BundleId = FName(*BundleGuid.ToString());
                         }
                         
-                        UE_LOG(LogTemp, Log, TEXT("Created new bundle with ID: %s"), *NewBundle->BundleId.ToString());
+                        UE_LOG(LogTemp, Log, TEXT("Created new bundle with ID: %s, DisplayName: %s"), 
+                            *NewBundle->BundleId.ToString(), 
+                            *NewBundle->DisplayName.ToString());
                         
                         // Add to manager and refresh
                         UCustomAssetManager& AssetManager = UCustomAssetManager::Get();
@@ -1395,10 +1480,25 @@ FReply SCustomAssetManagerEditorWindow::OnCreateBundleClicked()
                         try
                         {
                             // Save the bundle to the project
+                            UE_LOG(LogTemp, Log, TEXT("Saving new bundle to project: ID=%s, DisplayName=%s"), 
+                                *NewBundle->BundleId.ToString(), 
+                                *NewBundle->DisplayName.ToString());
+                                
                             bool bSaved = AssetManager.SaveBundle(NewBundle, TEXT("/Game/Bundles"));
                             if (!bSaved)
                             {
                                 UE_LOG(LogTemp, Warning, TEXT("Failed to save bundle %s"), *NewBundle->BundleId.ToString());
+                            }
+                            else
+                            {
+                                // Verify the bundle was saved with the correct properties
+                                UCustomAssetBundle* SavedBundle = AssetManager.GetBundleById(NewBundle->BundleId);
+                                if (SavedBundle)
+                                {
+                                    UE_LOG(LogTemp, Log, TEXT("Saved bundle verified: ID=%s, DisplayName=%s"), 
+                                        *SavedBundle->BundleId.ToString(), 
+                                        *SavedBundle->DisplayName.ToString());
+                                }
                             }
                         }
                         catch (const std::exception& e)
@@ -1561,6 +1661,10 @@ FReply SCustomAssetManagerEditorWindow::OnAddAssetToBundleClicked()
                         return FReply::Handled();
                     }
                     
+                    UE_LOG(LogTemp, Log, TEXT("Adding assets to bundle: ID=%s, DisplayName=%s"), 
+                        *(*SelectedBundle)->BundleId.ToString(), 
+                        *(*SelectedBundle)->DisplayName.ToString());
+                    
                     if ((*SelectedBundle)->BundleId.IsNone())
                     {
                         UE_LOG(LogTemp, Warning, TEXT("Adding assets to bundle with None ID, generating a new ID"));
@@ -1568,6 +1672,9 @@ FReply SCustomAssetManagerEditorWindow::OnAddAssetToBundleClicked()
                         FGuid NewGuid = FGuid::NewGuid();
                         (*SelectedBundle)->BundleId = FName(*NewGuid.ToString());
                     }
+                    
+                    // Store the bundle's display name before operations
+                    FText OriginalBundleName = (*SelectedBundle)->DisplayName;
                     
                     // Add all selected assets to the bundle
                     UCustomAssetManager& AssetManager = UCustomAssetManager::Get();
@@ -1580,10 +1687,21 @@ FReply SCustomAssetManagerEditorWindow::OnAddAssetToBundleClicked()
                             continue; // Skip invalid assets
                         }
                         
+                        UE_LOG(LogTemp, Log, TEXT("Adding asset %s to bundle %s"), 
+                            *AssetId.ToString(), *(*SelectedBundle)->BundleId.ToString());
+                            
                         // Add the asset to the bundle - the AddAsset method handles both loaded and unloaded assets
                         if (!(*SelectedBundle)->ContainsAsset(AssetId))
                         {
                             (*SelectedBundle)->AddAsset(AssetId);
+                            
+                            // Make sure the asset pointer is also added if it's loaded
+                            UCustomAssetBase* Asset = AssetManager.GetAssetById(AssetId);
+                            if (Asset && !(*SelectedBundle)->Assets.Contains(Asset))
+                            {
+                                (*SelectedBundle)->Assets.Add(Asset);
+                            }
+                            
                             AddedCount++;
                         }
                     }
@@ -1591,7 +1709,7 @@ FReply SCustomAssetManagerEditorWindow::OnAddAssetToBundleClicked()
                     // Show a message about how many assets were added
                     FText Message = FText::Format(LOCTEXT("AssetsAddedToBundle", "{0} assets added to bundle {1}"), 
                         FText::AsNumber(AddedCount), 
-                        (*SelectedBundle)->DisplayName);
+                        OriginalBundleName);
                     
                     // Save the bundle and refresh the UI
                     if (AddedCount > 0)
@@ -1599,7 +1717,33 @@ FReply SCustomAssetManagerEditorWindow::OnAddAssetToBundleClicked()
                         try
                         {
                             // Save the bundle if any assets were added
-                            (*SelectedBundle)->Save();
+                            // Get a local reference to the bundle before saving
+                            UCustomAssetBundle* BundleToSave = *SelectedBundle;
+                            FName BundleId = BundleToSave->BundleId;
+                            
+                            UE_LOG(LogTemp, Log, TEXT("Saving bundle after adding assets: ID=%s, DisplayName=%s, Assets=%d"), 
+                                *BundleId.ToString(), 
+                                *BundleToSave->DisplayName.ToString(),
+                                BundleToSave->AssetIds.Num());
+                            
+                            // Use AssetManager.SaveBundle directly instead of Bundle->Save()
+                            bool bSaved = AssetManager.SaveBundle(BundleToSave, TEXT("/Game/Bundles"));
+                            
+                            if (!bSaved)
+                            {
+                                UE_LOG(LogTemp, Error, TEXT("Failed to save bundle %s"), *BundleId.ToString());
+                                FMessageDialog::Open(EAppMsgType::Ok, FText::Format(LOCTEXT("FailedToSaveBundle", 
+                                    "Failed to save bundle {0}. Check the logs for more information."), OriginalBundleName));
+                            }
+                            
+                            // Verify that assets were saved in the bundle
+                            UCustomAssetBundle* SavedBundle = AssetManager.GetBundleById(BundleId);
+                            if (SavedBundle)
+                            {
+                                UE_LOG(LogTemp, Log, TEXT("After save: Bundle %s has %d assets"), 
+                                    *SavedBundle->BundleId.ToString(), 
+                                    SavedBundle->AssetIds.Num());
+                            }
                             
                             // Refresh the asset list to update bundle membership
                             RefreshAssetList();
@@ -1905,6 +2049,7 @@ bool SCustomAssetManagerEditorWindow::ImportAssetsFromCSV(const FString& FilePat
     int32 IconPathIndex = Headers.Find(TEXT("IconPath"));
     int32 MeshPathIndex = Headers.Find(TEXT("MeshPath"));
     int32 VersionIndex = Headers.Find(TEXT("Version"));
+    int32 LoadImmediatelyIndex = Headers.Find(TEXT("LoadImmediately"));
     
     // Check if all required columns are present
     if (AssetIdIndex == INDEX_NONE || DisplayNameIndex == INDEX_NONE || DescriptionIndex == INDEX_NONE)
@@ -1915,6 +2060,16 @@ bool SCustomAssetManagerEditorWindow::ImportAssetsFromCSV(const FString& FilePat
     
     // Get the asset manager
     UCustomAssetManager& AssetManager = UCustomAssetManager::Get();
+    
+    // Ask if the user wants to immediately load imported assets
+    bool bLoadAssetsImmediately = false;
+    EAppReturnType::Type Response = FMessageDialog::Open(EAppMsgType::YesNo, 
+        LOCTEXT("LoadAssetsQuestion", "Do you want to immediately load the imported assets? If no, assets will be registered but not loaded into memory."));
+    
+    if (Response == EAppReturnType::Yes)
+    {
+        bLoadAssetsImmediately = true;
+    }
     
     // Counter for imported assets
     int32 ImportedCount = 0;
@@ -1983,142 +2138,171 @@ bool SCustomAssetManagerEditorWindow::ImportAssetsFromCSV(const FString& FilePat
             continue;
         }
         
-        // Create a new item asset
-        UCustomItemAsset* NewItemAsset = NewObject<UCustomItemAsset>();
-        NewItemAsset->AssetId = AssetId;
-        NewItemAsset->DisplayName = FText::FromString(DisplayName);
-        NewItemAsset->Description = FText::FromString(Description);
-        
-        // Set additional properties if columns exist
-        if (ItemTypeIndex != INDEX_NONE && Values.Num() > ItemTypeIndex)
+        // Check if we should load this asset immediately
+        bool bLoadThisAsset = bLoadAssetsImmediately;
+        if (LoadImmediatelyIndex != INDEX_NONE && Values.Num() > LoadImmediatelyIndex)
         {
-            FString ItemType = Values[ItemTypeIndex];
-            ItemType = ItemType.Replace(TEXT("\""), TEXT(""));
-            NewItemAsset->Category = FName(*ItemType);
+            FString LoadImmediatelyStr = Values[LoadImmediatelyIndex];
+            LoadImmediatelyStr = LoadImmediatelyStr.Replace(TEXT("\""), TEXT(""));
+            bLoadThisAsset = LoadImmediatelyStr.Equals(TEXT("true"), ESearchCase::IgnoreCase) || 
+                            LoadImmediatelyStr.Equals(TEXT("1"), ESearchCase::IgnoreCase) ||
+                            LoadImmediatelyStr.Equals(TEXT("yes"), ESearchCase::IgnoreCase);
         }
         
-        if (ValueIndex != INDEX_NONE && Values.Num() > ValueIndex)
+        if (bLoadThisAsset)
         {
-            FString ValueStr = Values[ValueIndex];
-            ValueStr = ValueStr.Replace(TEXT("\""), TEXT(""));
-            if (!ValueStr.IsEmpty())
+            // Create a new item asset
+            UCustomItemAsset* NewItemAsset = NewObject<UCustomItemAsset>();
+            NewItemAsset->AssetId = AssetId;
+            NewItemAsset->DisplayName = FText::FromString(DisplayName);
+            NewItemAsset->Description = FText::FromString(Description);
+            
+            // Set additional properties if columns exist
+            if (ItemTypeIndex != INDEX_NONE && Values.Num() > ItemTypeIndex)
             {
-                NewItemAsset->Value = FCString::Atoi(*ValueStr);
+                FString ItemType = Values[ItemTypeIndex];
+                ItemType = ItemType.Replace(TEXT("\""), TEXT(""));
+                NewItemAsset->Category = FName(*ItemType);
             }
-        }
-        
-        if (WeightIndex != INDEX_NONE && Values.Num() > WeightIndex)
-        {
-            FString WeightStr = Values[WeightIndex];
-            WeightStr = WeightStr.Replace(TEXT("\""), TEXT(""));
-            if (!WeightStr.IsEmpty())
+            
+            if (ValueIndex != INDEX_NONE && Values.Num() > ValueIndex)
             {
-                NewItemAsset->Weight = FCString::Atof(*WeightStr);
-            }
-        }
-        
-        if (MaxStackSizeIndex != INDEX_NONE && Values.Num() > MaxStackSizeIndex)
-        {
-            FString MaxStackStr = Values[MaxStackSizeIndex];
-            MaxStackStr = MaxStackStr.Replace(TEXT("\""), TEXT(""));
-            if (!MaxStackStr.IsEmpty())
-            {
-                NewItemAsset->MaxStackSize = FCString::Atoi(*MaxStackStr);
-            }
-        }
-        
-        if (RarityIndex != INDEX_NONE && Values.Num() > RarityIndex)
-        {
-            FString Rarity = Values[RarityIndex];
-            Rarity = Rarity.Replace(TEXT("\""), TEXT(""));
-            NewItemAsset->Quality = StringToItemQuality(Rarity);
-        }
-        
-        if (TagsIndex != INDEX_NONE && Values.Num() > TagsIndex)
-        {
-            FString TagsStr = Values[TagsIndex];
-            TagsStr = TagsStr.Replace(TEXT("\""), TEXT(""));
-            if (!TagsStr.IsEmpty())
-            {
-                TArray<FString> TagArray;
-                TagsStr.ParseIntoArray(TagArray, TEXT(","), true);
-                
-                for (const FString& TagName : TagArray)
+                FString ValueStr = Values[ValueIndex];
+                ValueStr = ValueStr.Replace(TEXT("\""), TEXT(""));
+                if (!ValueStr.IsEmpty())
                 {
-                    NewItemAsset->Tags.Add(FName(*TagName));
+                    NewItemAsset->Value = FCString::Atoi(*ValueStr);
                 }
             }
-        }
-        
-        if (EffectDesc1Index != INDEX_NONE && Values.Num() > EffectDesc1Index)
-        {
-            FString EffectDesc = Values[EffectDesc1Index];
-            EffectDesc = EffectDesc.Replace(TEXT("\""), TEXT(""));
-            if (!EffectDesc.IsEmpty())
+            
+            if (WeightIndex != INDEX_NONE && Values.Num() > WeightIndex)
             {
-                // Create and add a basic usage effect
-                FItemUsageEffect NewEffect;
-                NewEffect.StatName = FName(TEXT("Health"));
-                NewEffect.Value = 10.0f;  // Default healing value
-                NewEffect.Duration = 0.0f; // Instant effect
-                NewItemAsset->UsageEffects.Add(NewEffect);
+                FString WeightStr = Values[WeightIndex];
+                WeightStr = WeightStr.Replace(TEXT("\""), TEXT(""));
+                if (!WeightStr.IsEmpty())
+                {
+                    NewItemAsset->Weight = FCString::Atof(*WeightStr);
+                }
             }
-        }
-        
-        if (EffectDesc2Index != INDEX_NONE && Values.Num() > EffectDesc2Index)
-        {
-            FString EffectDesc = Values[EffectDesc2Index];
-            EffectDesc = EffectDesc.Replace(TEXT("\""), TEXT(""));
-            if (!EffectDesc.IsEmpty())
+            
+            if (MaxStackSizeIndex != INDEX_NONE && Values.Num() > MaxStackSizeIndex)
             {
-                // Create and add another basic usage effect (different stat)
-                FItemUsageEffect NewEffect;
-                NewEffect.StatName = FName(TEXT("Stamina"));
-                NewEffect.Value = 15.0f;  // Default stamina boost
-                NewEffect.Duration = 5.0f; // 5 second duration
-                NewItemAsset->UsageEffects.Add(NewEffect);
+                FString MaxStackStr = Values[MaxStackSizeIndex];
+                MaxStackStr = MaxStackStr.Replace(TEXT("\""), TEXT(""));
+                if (!MaxStackStr.IsEmpty())
+                {
+                    NewItemAsset->MaxStackSize = FCString::Atoi(*MaxStackStr);
+                }
             }
-        }
-        
-        if (IconPathIndex != INDEX_NONE && Values.Num() > IconPathIndex)
-        {
-            FString IconPath = Values[IconPathIndex];
-            IconPath = IconPath.Replace(TEXT("\""), TEXT(""));
-            if (!IconPath.IsEmpty())
+            
+            if (RarityIndex != INDEX_NONE && Values.Num() > RarityIndex)
             {
-                NewItemAsset->Icon = TSoftObjectPtr<UTexture2D>(FSoftObjectPath(IconPath));
+                FString Rarity = Values[RarityIndex];
+                Rarity = Rarity.Replace(TEXT("\""), TEXT(""));
+                NewItemAsset->Quality = StringToItemQuality(Rarity);
             }
-        }
-        
-        if (MeshPathIndex != INDEX_NONE && Values.Num() > MeshPathIndex)
-        {
-            FString MeshPath = Values[MeshPathIndex];
-            MeshPath = MeshPath.Replace(TEXT("\""), TEXT(""));
-            if (!MeshPath.IsEmpty())
+            
+            if (TagsIndex != INDEX_NONE && Values.Num() > TagsIndex)
             {
-                NewItemAsset->ItemMesh = TSoftObjectPtr<UStaticMesh>(FSoftObjectPath(MeshPath));
+                FString TagsStr = Values[TagsIndex];
+                TagsStr = TagsStr.Replace(TEXT("\""), TEXT(""));
+                if (!TagsStr.IsEmpty())
+                {
+                    TArray<FString> TagArray;
+                    TagsStr.ParseIntoArray(TagArray, TEXT(","), true);
+                    
+                    for (const FString& TagName : TagArray)
+                    {
+                        NewItemAsset->Tags.Add(FName(*TagName));
+                    }
+                }
             }
-        }
-        
-        if (VersionIndex != INDEX_NONE && Values.Num() > VersionIndex)
-        {
-            FString VersionStr = Values[VersionIndex];
-            VersionStr = VersionStr.Replace(TEXT("\""), TEXT(""));
-            if (!VersionStr.IsEmpty())
+            
+            if (EffectDesc1Index != INDEX_NONE && Values.Num() > EffectDesc1Index)
             {
-                NewItemAsset->Version = FCString::Atoi(*VersionStr);
+                FString EffectDesc = Values[EffectDesc1Index];
+                EffectDesc = EffectDesc.Replace(TEXT("\""), TEXT(""));
+                if (!EffectDesc.IsEmpty())
+                {
+                    // Create and add a basic usage effect
+                    FItemUsageEffect NewEffect;
+                    NewEffect.StatName = FName(TEXT("Health"));
+                    NewEffect.Value = 10.0f;  // Default healing value
+                    NewEffect.Duration = 0.0f; // Instant effect
+                    NewItemAsset->UsageEffects.Add(NewEffect);
+                }
             }
+            
+            if (EffectDesc2Index != INDEX_NONE && Values.Num() > EffectDesc2Index)
+            {
+                FString EffectDesc = Values[EffectDesc2Index];
+                EffectDesc = EffectDesc.Replace(TEXT("\""), TEXT(""));
+                if (!EffectDesc.IsEmpty())
+                {
+                    // Create and add another basic usage effect (different stat)
+                    FItemUsageEffect NewEffect;
+                    NewEffect.StatName = FName(TEXT("Stamina"));
+                    NewEffect.Value = 15.0f;  // Default stamina boost
+                    NewEffect.Duration = 5.0f; // 5 second duration
+                    NewItemAsset->UsageEffects.Add(NewEffect);
+                }
+            }
+            
+            if (IconPathIndex != INDEX_NONE && Values.Num() > IconPathIndex)
+            {
+                FString IconPath = Values[IconPathIndex];
+                IconPath = IconPath.Replace(TEXT("\""), TEXT(""));
+                if (!IconPath.IsEmpty())
+                {
+                    NewItemAsset->Icon = TSoftObjectPtr<UTexture2D>(FSoftObjectPath(IconPath));
+                }
+            }
+            
+            if (MeshPathIndex != INDEX_NONE && Values.Num() > MeshPathIndex)
+            {
+                FString MeshPath = Values[MeshPathIndex];
+                MeshPath = MeshPath.Replace(TEXT("\""), TEXT(""));
+                if (!MeshPath.IsEmpty())
+                {
+                    NewItemAsset->ItemMesh = TSoftObjectPtr<UStaticMesh>(FSoftObjectPath(MeshPath));
+                }
+            }
+            
+            if (VersionIndex != INDEX_NONE && Values.Num() > VersionIndex)
+            {
+                FString VersionStr = Values[VersionIndex];
+                VersionStr = VersionStr.Replace(TEXT("\""), TEXT(""));
+                if (!VersionStr.IsEmpty())
+                {
+                    NewItemAsset->Version = FCString::Atoi(*VersionStr);
+                }
+            }
+            
+            // Register the asset with the asset manager
+            AssetManager.RegisterAsset(NewItemAsset);
+            UE_LOG(LogTemp, Log, TEXT("Created and loaded asset: %s"), *AssetIdStr);
+        }
+        else
+        {
+            // Just register the asset ID and path without loading it
+            FSoftObjectPath AssetPath = FSoftObjectPath(FString::Printf(TEXT("/Game/Items/%s"), *AssetIdStr));
+            AssetManager.RegisterAssetPath(AssetId, AssetPath);
+            UE_LOG(LogTemp, Log, TEXT("Registered asset ID without loading: %s"), *AssetIdStr);
         }
         
-        // Register the asset with the asset manager
-        AssetManager.RegisterAsset(NewItemAsset);
         ImportedCount++;
     }
     
     // Show a notification with the number of imported assets
     if (ImportedCount > 0)
     {
-        FText NotificationText = FText::Format(LOCTEXT("AssetsImported", "Successfully imported {0} assets"), FText::AsNumber(ImportedCount));
+        FString LoadStatus = bLoadAssetsImmediately ? TEXT("and loaded") : TEXT("without loading");
+        FText NotificationText = FText::Format(
+            LOCTEXT("AssetsImported", "Successfully imported {0} assets {1}"), 
+            FText::AsNumber(ImportedCount),
+            FText::FromString(LoadStatus)
+        );
+        
         FNotificationInfo Info(NotificationText);
         Info.ExpireDuration = 5.0f;
         FSlateNotificationManager::Get().AddNotification(Info);
@@ -2393,6 +2577,155 @@ FString GetEnumValueString(const ECharacterClass CharClass)
         case ECharacterClass::Monster:  return TEXT("Monster");
         case ECharacterClass::NPC:      return TEXT("NPC");
         default:                        return TEXT("Unknown");
+    }
+}
+
+void SCustomAssetManagerEditorWindow::ShowRenameBundleDialog(UCustomAssetBundle* Bundle)
+{
+    if (!Bundle)
+    {
+        UE_LOG(LogTemp, Warning, TEXT("ShowRenameBundleDialog called with null bundle"));
+        return;
+    }
+
+    // Create a dialog to get the new bundle name
+    TSharedRef<SEditableTextBox> BundleNameTextBox = SNew(SEditableTextBox)
+        .Text(Bundle->DisplayName)
+        .HintText(LOCTEXT("BundleRenameHint", "Enter new bundle name"))
+        .MinDesiredWidth(250);
+        
+    // Show dialog - use TSharedPtr instead of TSharedRef to better handle lifetime
+    TSharedPtr<SWindow> DialogWindow = SNew(SWindow)
+        .Title(LOCTEXT("RenameBundleTitle", "Rename Asset Bundle"))
+        .ClientSize(FVector2D(400, 120))
+        .SupportsMaximize(false)
+        .SupportsMinimize(false);
+        
+    DialogWindow->SetContent(
+        SNew(SVerticalBox)
+        +SVerticalBox::Slot()
+        .Padding(10)
+        .AutoHeight()
+        [
+            SNew(STextBlock)
+            .Text(FText::Format(LOCTEXT("RenameBundlePrompt", "Rename bundle '{0}' to:"), Bundle->DisplayName))
+        ]
+        +SVerticalBox::Slot()
+        .Padding(10)
+        .AutoHeight()
+        [
+            BundleNameTextBox
+        ]
+        +SVerticalBox::Slot()
+        .Padding(10)
+        .AutoHeight()
+        .HAlign(HAlign_Right)
+        [
+            SNew(SHorizontalBox)
+            +SHorizontalBox::Slot()
+            .AutoWidth()
+            .Padding(5, 0)
+            [
+                SNew(SButton)
+                .Text(LOCTEXT("RenameButton", "Rename"))
+                .OnClicked_Lambda([this, BundleNameTextBox, Bundle, WeakDialogWindow = TWeakPtr<SWindow>(DialogWindow)]()
+                {
+                    FString NewBundleName = BundleNameTextBox->GetText().ToString();
+                    if (NewBundleName.IsEmpty())
+                    {
+                        FMessageDialog::Open(EAppMsgType::Ok, LOCTEXT("EmptyBundleName", "Bundle name cannot be empty."));
+                        return FReply::Handled();
+                    }
+                    
+                    // Get the asset manager
+                    UCustomAssetManager& AssetManager = UCustomAssetManager::Get();
+                    
+                    // Rename the bundle
+                    bool bSuccess = AssetManager.RenameBundle(Bundle->BundleId, NewBundleName);
+                    
+                    if (bSuccess)
+                    {
+                        UE_LOG(LogTemp, Log, TEXT("Bundle renamed successfully"));
+                        
+                        // Close dialog
+                        TSharedPtr<SWindow> PinnedWindow = WeakDialogWindow.Pin();
+                        if (PinnedWindow.IsValid())
+                        {
+                            FSlateApplication::Get().RequestDestroyWindow(PinnedWindow.ToSharedRef());
+                        }
+                        
+                        // Refresh the bundle list
+                        RefreshBundleList();
+                    }
+                    else
+                    {
+                        FMessageDialog::Open(EAppMsgType::Ok, LOCTEXT("FailedToRename", "Failed to rename bundle."));
+                    }
+                    
+                    return FReply::Handled();
+                })
+            ]
+            +SHorizontalBox::Slot()
+            .AutoWidth()
+            .Padding(5, 0)
+            [
+                SNew(SButton)
+                .Text(LOCTEXT("CancelButton", "Cancel"))
+                .OnClicked_Lambda([WeakDialogWindow = TWeakPtr<SWindow>(DialogWindow)]()
+                {
+                    TSharedPtr<SWindow> PinnedWindow = WeakDialogWindow.Pin();
+                    if (PinnedWindow.IsValid())
+                    {
+                        FSlateApplication::Get().RequestDestroyWindow(PinnedWindow.ToSharedRef());
+                    }
+                    return FReply::Handled();
+                })
+            ]
+        ]
+    );
+    
+    FSlateApplication::Get().AddModalWindow(DialogWindow.ToSharedRef(), FGlobalTabmanager::Get()->GetRootWindow());
+}
+
+void SCustomAssetManagerEditorWindow::ShowDeleteBundleDialog(UCustomAssetBundle* Bundle)
+{
+    if (!Bundle)
+    {
+        UE_LOG(LogTemp, Warning, TEXT("ShowDeleteBundleDialog called with null bundle"));
+        return;
+    }
+
+    // Create confirmation dialog
+    EAppReturnType::Type ReturnType = FMessageDialog::Open(
+        EAppMsgType::YesNo, 
+        FText::Format(
+            LOCTEXT("DeleteBundleConfirmation", "Are you sure you want to delete the bundle '{0}'?\nThis will not delete the assets in the bundle."), 
+            Bundle->DisplayName
+        )
+    );
+    
+    if (ReturnType == EAppReturnType::Yes)
+    {
+        // Get the asset manager
+        UCustomAssetManager& AssetManager = UCustomAssetManager::Get();
+        
+        // Delete the bundle
+        bool bSuccess = AssetManager.DeleteBundle(Bundle->BundleId);
+        
+        if (bSuccess)
+        {
+            UE_LOG(LogTemp, Log, TEXT("Bundle deleted successfully"));
+            
+            // Refresh the bundle list
+            RefreshBundleList();
+            
+            // Also refresh the asset list to update bundle membership
+            RefreshAssetList();
+        }
+        else
+        {
+            FMessageDialog::Open(EAppMsgType::Ok, LOCTEXT("FailedToDelete", "Failed to delete bundle."));
+        }
     }
 }
 

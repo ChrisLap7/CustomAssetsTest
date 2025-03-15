@@ -13,37 +13,6 @@ This project demonstrates a custom asset management system for Unreal Engine 5.4
 - Level-specific asset loading
 - Custom asset editor window
 
-## Project Setup and Build Instructions
-
-### Initial Setup
-
-1. **Clone/Download the Project**:
-   - Clone this repository or download as a ZIP file
-   - Extract to a location on your hard drive
-
-2. **Generate Project Files**:
-   - Run `CleanAndRegenerateProject.bat` to set up a clean build environment
-   - This script will:
-     - Clean up Intermediate and Binaries folders
-     - Remove any previous Visual Studio files
-     - Generate fresh project files
-
-3. **Open the Project**:
-   - Double-click the `.uproject` file to open in Unreal Editor
-   - If prompted to rebuild modules, select "Yes"
-
-### Building the Project
-
-1. **Using Visual Studio**:
-   - Open the solution in Visual Studio
-   - Set the build configuration to "Development Editor"
-   - Build the solution
-   
-2. **Troubleshooting Build Issues**:
-   - If you encounter build errors, run `CleanAndRegenerateProject.bat` again
-   - Make sure Visual Studio is completely closed before running the batch file
-   - If problems persist, check the Output Log for specific error messages
-
 ## Designer's Guide: Using the Custom Asset System
 
 This guide is for designers and content creators who need to work with the Custom Asset System without dealing with code.
@@ -248,15 +217,6 @@ For more technical details or custom implementations, please consult with the pr
 - `UCustomItemAsset`: Sample asset type for items
 - `UCustomCharacterAsset`: Asset type for character data
 - `FCustomAssetEditorModule`: Editor module for the Custom Asset Manager
-
-## Recent Changes
-
-- Fixed build issues with the editor module
-- Improved module registration and initialization
-- Added menu entry in the Window menu for the Custom Asset Manager
-- Optimized build process with a new cleanup script (`CleanAndRegenerateProject.bat`)
-- Updated documentation with detailed instructions for level-specific asset loading
-- Enhanced asset data table integration and management
 
 ## License
 

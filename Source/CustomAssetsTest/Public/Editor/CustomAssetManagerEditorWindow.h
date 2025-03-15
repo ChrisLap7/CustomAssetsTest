@@ -380,6 +380,12 @@ private:
     /** Shows a dialog to remove an asset from one of its bundles */
     void ShowRemoveFromBundleDialog(const FName& AssetId);
     
+    /** Shows a dialog to rename a bundle */
+    void ShowRenameBundleDialog(UCustomAssetBundle* Bundle);
+
+    /** Shows a dialog to confirm deletion of a bundle */
+    void ShowDeleteBundleDialog(UCustomAssetBundle* Bundle);
+
     /** Called when the search text changes */
     void OnAssetSearchTextChanged(const FText& NewText);
     

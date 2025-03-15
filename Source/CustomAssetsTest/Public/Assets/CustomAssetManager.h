@@ -234,9 +234,17 @@ public:
     UFUNCTION(BlueprintCallable, Category = "Memory Management")
     UCustomAssetMemoryTracker* GetMemoryTracker() const;
     
-    // Register an asset with the manager (used by editor tools to create assets)
+    // Register an asset with the manager
     UFUNCTION(BlueprintCallable, Category = "Asset Management")
     void RegisterAsset(UCustomAssetBase* Asset);
+
+    // Register an asset path without loading the asset
+    UFUNCTION(BlueprintCallable, Category = "Asset Management")
+    void RegisterAssetPath(const FName& AssetId, const FSoftObjectPath& AssetPath);
+
+    // Unregister an asset from the manager
+    UFUNCTION(BlueprintCallable, Category = "Asset Management")
+    void UnregisterAsset(UCustomAssetBase* Asset);
 
     // Estimate memory usage for an asset
     UFUNCTION(BlueprintCallable, Category = "Memory Management")
@@ -272,9 +280,6 @@ private:
 
     // Callback for when an asset finishes streaming
     void OnAssetStreamed(FName AssetId);
-
-    // Internal function to remove an asset from the tracking maps
-    void UnregisterAsset(UCustomAssetBase* Asset);
 
     // Internal function to register dependencies between assets
     void RegisterAssetDependencies(UCustomAssetBase* Asset);

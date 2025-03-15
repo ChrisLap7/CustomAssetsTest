@@ -17,18 +17,33 @@ void UCustomAssetBundle::AddAsset(const FName& AssetId)
         return;
     }
 
+    // Log the operation
+    UE_LOG(LogTemp, Log, TEXT("Adding asset ID %s to bundle %s (DisplayName: %s)"), 
+        *AssetId.ToString(), *BundleId.ToString(), *DisplayName.ToString());
+    
+    // First check if the asset is already in the bundle
     if (!AssetIds.Contains(AssetId))
     {
-        UE_LOG(LogTemp, Log, TEXT("Adding asset ID %s to bundle %s"), *AssetId.ToString(), *BundleId.ToString());
+        // Add the asset ID to the AssetIds array regardless of whether it's loaded
         AssetIds.Add(AssetId);
+        UE_LOG(LogTemp, Log, TEXT("Added asset ID %s to bundle's AssetIds array"), *AssetId.ToString());
         
-        // Check if the asset is loaded and add it to the Assets array if it is
+        // If the asset is loaded, also add it to the Assets array
         UCustomAssetManager& AssetManager = UCustomAssetManager::Get();
         UCustomAssetBase* Asset = AssetManager.GetAssetById(AssetId);
         if (Asset && !Assets.Contains(Asset))
         {
             Assets.Add(Asset);
+            UE_LOG(LogTemp, Log, TEXT("Asset %s is loaded, also added to Assets array"), *AssetId.ToString());
         }
+        else if (!Asset)
+        {
+            UE_LOG(LogTemp, Log, TEXT("Asset %s is not currently loaded, only added AssetId"), *AssetId.ToString());
+        }
+    }
+    else
+    {
+        UE_LOG(LogTemp, Log, TEXT("Asset ID %s is already in bundle %s"), *AssetId.ToString(), *BundleId.ToString());
     }
 }
 
@@ -39,23 +54,50 @@ void UCustomAssetBundle::RemoveAsset(const FName& AssetId)
         return;
     }
     
+    // Log the operation
+    UE_LOG(LogTemp, Log, TEXT("Removing asset ID %s from bundle %s (DisplayName: %s)"), 
+        *AssetId.ToString(), *BundleId.ToString(), *DisplayName.ToString());
+    
     // Remove from AssetIds array
-    AssetIds.Remove(AssetId);
+    bool bRemovedFromIds = AssetIds.Remove(AssetId) > 0;
     
     // Also remove from Assets array if it's loaded
     UCustomAssetManager& AssetManager = UCustomAssetManager::Get();
     UCustomAssetBase* Asset = AssetManager.GetAssetById(AssetId);
+    bool bRemovedFromAssets = false;
     if (Asset)
     {
-        Assets.Remove(Asset);
+        bRemovedFromAssets = Assets.Remove(Asset) > 0;
     }
     
-    UE_LOG(LogTemp, Log, TEXT("Removed asset ID %s from bundle %s"), *AssetId.ToString(), *BundleId.ToString());
+    if (bRemovedFromIds || bRemovedFromAssets)
+    {
+        UE_LOG(LogTemp, Log, TEXT("Successfully removed asset ID %s from bundle %s"), *AssetId.ToString(), *BundleId.ToString());
+    }
+    else
+    {
+        UE_LOG(LogTemp, Warning, TEXT("Asset ID %s was not found in bundle %s"), *AssetId.ToString(), *BundleId.ToString());
+    }
 }
 
 bool UCustomAssetBundle::ContainsAsset(const FName& AssetId) const
 {
-    return AssetIds.Contains(AssetId);
+    // Always check the AssetIds array first
+    if (AssetIds.Contains(AssetId))
+    {
+        return true;
+    }
+    
+    // For backward compatibility, also check the loaded Assets array
+    for (UCustomAssetBase* Asset : Assets)
+    {
+        if (Asset && Asset->AssetId == AssetId)
+        {
+            return true;
+        }
+    }
+    
+    return false;
 }
 
 // Implementation of the Save method
@@ -69,7 +111,15 @@ bool UCustomAssetBundle::Save()
         BundleId = FName(*NewGuid.ToString());
     }
     
-    UE_LOG(LogTemp, Warning, TEXT("UCustomAssetBundle::Save - Saving bundle %s"), *BundleId.ToString());
+    // Make sure the bundle has a display name
+    if (DisplayName.IsEmpty())
+    {
+        UE_LOG(LogTemp, Warning, TEXT("UCustomAssetBundle::Save - Bundle has no display name, using ID as display name"));
+        DisplayName = FText::FromName(BundleId);
+    }
+    
+    UE_LOG(LogTemp, Warning, TEXT("UCustomAssetBundle::Save - Saving bundle %s (DisplayName: %s)"), 
+        *BundleId.ToString(), *DisplayName.ToString());
     
     // Use the asset manager's SaveBundle method to save this bundle to the project
     UCustomAssetManager& AssetManager = UCustomAssetManager::Get();
