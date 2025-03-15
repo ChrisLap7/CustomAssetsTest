@@ -1,0 +1,9 @@
+\Intermediate\
+/Intermediate
+/Saved
+/Binaries
+/.vs
+CleanAndRegenerateProject.bat
+CustomAssetsTest.sln
+RegenerateProjectFiles.bat
+.vsconfig
