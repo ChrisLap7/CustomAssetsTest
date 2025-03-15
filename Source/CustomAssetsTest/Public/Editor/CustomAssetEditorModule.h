@@ -23,9 +23,6 @@ private:
     // Helper method to register menus using the ToolMenus system
     void RegisterMenus();
 
-    // Legacy menu extension method (deprecated)
-    void AddMenuEntry(class FMenuBuilder& MenuBuilder);
-
     // Command list for editor actions
     TSharedPtr<FUICommandList> PluginCommands;
 };

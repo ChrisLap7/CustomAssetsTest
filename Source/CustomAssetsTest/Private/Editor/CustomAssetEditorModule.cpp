@@ -89,12 +89,6 @@ void FCustomAssetEditorModule::OnOpenAssetManager()
     SCustomAssetManagerEditorWindow::OpenWindow();
 }
 
-void FCustomAssetEditorModule::AddMenuEntry(FMenuBuilder& MenuBuilder)
-{
-    // Deprecated - using RegisterMenus instead
-    MenuBuilder.AddMenuEntry(FCustomAssetManagerCommands::Get().OpenAssetManagerWindow);
-}
-
 #undef LOCTEXT_NAMESPACE 
 
 // We need to use a unique module name for the editor module - do not reimplement the main module

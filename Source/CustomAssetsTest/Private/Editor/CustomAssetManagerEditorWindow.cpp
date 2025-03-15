@@ -1715,7 +1715,23 @@ FReply SCustomAssetManagerEditorWindow::OnAddAssetToBundleClicked()
     TArray<FName> SelectedAssetIds;
     for (const TSharedPtr<FAssetEntry>& AssetEntry : SelectedAssets)
     {
-        SelectedAssetIds.Add(AssetEntry->AssetId);
+        // Add the asset ID to our list of selected assets, only if it's valid
+        if (!AssetEntry->AssetId.IsNone())
+        {
+            SelectedAssetIds.Add(AssetEntry->AssetId);
+            UE_LOG(LogTemp, Warning, TEXT("[CRITICAL] OnAddAssetToBundleClicked: Selected asset for adding: %s"), 
+                *AssetEntry->AssetId.ToString());
+        }
+        else
+        {
+            UE_LOG(LogTemp, Warning, TEXT("[CRITICAL] OnAddAssetToBundleClicked: Skipping None AssetId in selected assets"));
+        }
+    }
+    
+    if (SelectedAssetIds.Num() == 0)
+    {
+        FMessageDialog::Open(EAppMsgType::Ok, LOCTEXT("NoValidAssetsSelected", "No valid assets selected. Please select at least one valid asset."));
+        return FReply::Handled();
     }
     
     // Get all available bundles
@@ -1734,6 +1750,16 @@ FReply SCustomAssetManagerEditorWindow::OnAddAssetToBundleClicked()
     TArray<TSharedPtr<FBundleEntry>> BundleOptions;
     for (UCustomAssetBundle* Bundle : AllBundles)
     {
+        if (!Bundle)
+        {
+            UE_LOG(LogTemp, Warning, TEXT("[CRITICAL] OnAddAssetToBundleClicked: Skipping null bundle"));
+            continue;
+        }
+        
+        UE_LOG(LogTemp, Warning, TEXT("[CRITICAL] OnAddAssetToBundleClicked: Processing bundle: ID=%s, DisplayName=%s"), 
+            *Bundle->BundleId.ToString(), 
+            *Bundle->DisplayName.ToString());
+        
         // Check if any of the selected assets are already in this bundle
         bool bAssetAlreadyInBundle = false;
         for (const FName& AssetId : SelectedAssetIds)
@@ -1741,7 +1767,7 @@ FReply SCustomAssetManagerEditorWindow::OnAddAssetToBundleClicked()
             if (Bundle->ContainsAsset(AssetId))
             {
                 bAssetAlreadyInBundle = true;
-                UE_LOG(LogTemp, Verbose, TEXT("Asset %s is already in bundle %s, skipping from options"),
+                UE_LOG(LogTemp, Warning, TEXT("[CRITICAL] OnAddAssetToBundleClicked: Asset %s is already in bundle %s, skipping from options"),
                     *AssetId.ToString(), *Bundle->BundleId.ToString());
                 break;
             }
@@ -1828,13 +1854,16 @@ FReply SCustomAssetManagerEditorWindow::OnAddAssetToBundleClicked()
                         return FReply::Handled();
                     }
                     
-                    UE_LOG(LogTemp, Log, TEXT("Adding assets to bundle: ID=%s, DisplayName=%s"), 
+                    UE_LOG(LogTemp, Warning, TEXT("[CRITICAL] OnAddAssetToBundleClicked: Adding assets to bundle: ID=%s, DisplayName=%s"), 
                         *(*SelectedBundle)->BundleId.ToString(), 
                         *(*SelectedBundle)->DisplayName.ToString());
                     
+                    // CRITICAL: Verify the bundle is in a good state before adding assets
+                    (*SelectedBundle)->DebugPrintContents(TEXT("BEFORE_ADDING_ASSETS"));
+                    
                     if ((*SelectedBundle)->BundleId.IsNone())
                     {
-                        UE_LOG(LogTemp, Warning, TEXT("Adding assets to bundle with None ID, generating a new ID"));
+                        UE_LOG(LogTemp, Warning, TEXT("[CRITICAL] OnAddAssetToBundleClicked: Adding assets to bundle with None ID, generating a new ID"));
                         // Generate a new ID for the bundle
                         FGuid NewGuid = FGuid::NewGuid();
                         (*SelectedBundle)->BundleId = FName(*NewGuid.ToString());
@@ -1847,29 +1876,43 @@ FReply SCustomAssetManagerEditorWindow::OnAddAssetToBundleClicked()
                     UCustomAssetManager& AssetManager = UCustomAssetManager::Get();
                     int32 AddedCount = 0;
                     
+                    // CRITICAL FIX: Make sure we're only adding selected assets 
+                    UE_LOG(LogTemp, Warning, TEXT("[CRITICAL] OnAddAssetToBundleClicked: About to add %d selected assets to bundle"), 
+                        SelectedAssetIds.Num());
+                    
                     for (const FName& AssetId : SelectedAssetIds)
                     {
                         if (AssetId.IsNone())
                         {
+                            UE_LOG(LogTemp, Warning, TEXT("[CRITICAL] OnAddAssetToBundleClicked: Skipping None AssetId"));
                             continue; // Skip invalid assets
                         }
                         
-                        UE_LOG(LogTemp, Log, TEXT("Adding asset %s to bundle %s"), 
+                        UE_LOG(LogTemp, Warning, TEXT("[CRITICAL] OnAddAssetToBundleClicked: Processing asset %s for bundle %s"), 
                             *AssetId.ToString(), *(*SelectedBundle)->BundleId.ToString());
                             
                         // Add the asset to the bundle - the AddAsset method handles both loaded and unloaded assets
                         if (!(*SelectedBundle)->ContainsAsset(AssetId))
                         {
+                            UE_LOG(LogTemp, Warning, TEXT("[CRITICAL] OnAddAssetToBundleClicked: Asset %s not in bundle, adding it"), 
+                                *AssetId.ToString());
+                                
                             (*SelectedBundle)->AddAsset(AssetId);
                             
                             // Make sure the asset pointer is also added if it's loaded
                             UCustomAssetBase* Asset = AssetManager.GetAssetById(AssetId);
                             if (Asset && !(*SelectedBundle)->Assets.Contains(Asset))
                             {
+                                UE_LOG(LogTemp, Warning, TEXT("[CRITICAL] OnAddAssetToBundleClicked: Adding loaded asset to Assets array"));
                                 (*SelectedBundle)->Assets.Add(Asset);
                             }
                             
                             AddedCount++;
+                        }
+                        else
+                        {
+                            UE_LOG(LogTemp, Warning, TEXT("[CRITICAL] OnAddAssetToBundleClicked: Asset %s already in bundle, skipping"), 
+                                *AssetId.ToString());
                         }
                     }
                     
@@ -2008,7 +2051,7 @@ void SCustomAssetManagerEditorWindow::ShowRemoveFromBundleDialog(const FName& As
 {
     if (AssetId.IsNone())
     {
-        UE_LOG(LogTemp, Warning, TEXT("ShowRemoveFromBundleDialog called with None AssetId"));
+        UE_LOG(LogTemp, Warning, TEXT("[CRITICAL] ShowRemoveFromBundleDialog called with None AssetId"));
         return;
     }
 
@@ -2018,25 +2061,45 @@ void SCustomAssetManagerEditorWindow::ShowRemoveFromBundleDialog(const FName& As
     // Get the asset - can be null for unloaded assets
     UCustomAssetBase* Asset = AssetManager.GetAssetById(AssetId);
     
+    // CRITICAL FIX: Get all bundles this asset is in
+    UE_LOG(LogTemp, Warning, TEXT("[CRITICAL] ShowRemoveFromBundleDialog: Checking bundles containing asset %s"), 
+        *AssetId.ToString());
+    
     // Get all bundles this asset is in
     TArray<UCustomAssetBundle*> AssetBundles;
-    for (UCustomAssetBundle* Bundle : AssetManager.GetAllBundlesContainingAsset(AssetId))
+    TArray<UCustomAssetBundle*> AllBundles;
+    AssetManager.GetAllBundles(AllBundles);
+    
+    // Manually check each bundle to verify the asset is really in it
+    for (UCustomAssetBundle* Bundle : AllBundles)
     {
         if (Bundle && !Bundle->BundleId.IsNone())
         {
-            AssetBundles.Add(Bundle);
+            // Explicitly check if the bundle contains the asset
+            bool bContainsAsset = Bundle->ContainsAsset(AssetId);
+            UE_LOG(LogTemp, Warning, TEXT("[CRITICAL] ShowRemoveFromBundleDialog: Checking bundle %s (%s) - Contains asset: %s"), 
+                *Bundle->BundleId.ToString(), *Bundle->DisplayName.ToString(), bContainsAsset ? TEXT("Yes") : TEXT("No"));
+                
+            if (bContainsAsset)
+            {
+                AssetBundles.Add(Bundle);
+            }
         }
         else if (Bundle && Bundle->BundleId.IsNone())
         {
-            UE_LOG(LogTemp, Warning, TEXT("Skipping bundle with None ID in ShowRemoveFromBundleDialog"));
+            UE_LOG(LogTemp, Warning, TEXT("[CRITICAL] ShowRemoveFromBundleDialog: Skipping bundle with None ID"));
         }
     }
     
     if (AssetBundles.Num() == 0)
     {
+        UE_LOG(LogTemp, Warning, TEXT("[CRITICAL] ShowRemoveFromBundleDialog: Asset %s is not in any bundles"), *AssetId.ToString());
         FMessageDialog::Open(EAppMsgType::Ok, LOCTEXT("AssetNotInAnyBundles", "This asset is not in any bundles."));
         return;
     }
+    
+    UE_LOG(LogTemp, Warning, TEXT("[CRITICAL] ShowRemoveFromBundleDialog: Asset %s is in %d bundles"), 
+        *AssetId.ToString(), AssetBundles.Num());
     
     // Create a dialog to select which bundle to remove from
     TSharedRef<SWindow> DialogWindow = SNew(SWindow)
@@ -2109,35 +2172,67 @@ void SCustomAssetManagerEditorWindow::ShowRemoveFromBundleDialog(const FName& As
                 SNew(SButton)
                 .Text(LOCTEXT("RemoveButton", "Remove"))
                 .OnClicked_Lambda([this, DialogWindow, SelectedBundle, AssetId, &AssetManager]() {
-                    if (!SelectedBundle)
+                    if (!SelectedBundle || !(*SelectedBundle))
                     {
                         FMessageDialog::Open(EAppMsgType::Ok, LOCTEXT("NoBundleSelected", "No bundle selected for removal. Please select a bundle first."));
                         return FReply::Handled();
                     }
                     
-                    if (*SelectedBundle == nullptr)
-                    {
-                        FMessageDialog::Open(EAppMsgType::Ok, LOCTEXT("NoBundleSelected", "No bundle selected for removal. Please select a bundle first."));
-                        return FReply::Handled();
-                    }
+                    UE_LOG(LogTemp, Warning, TEXT("[CRITICAL] RemoveFromBundle: Removing asset %s from bundle %s"), 
+                        *AssetId.ToString(), *(*SelectedBundle)->BundleId.ToString());
                     
+                    // Double-check the bundle ID
                     if ((*SelectedBundle)->BundleId.IsNone())
                     {
-                        UE_LOG(LogTemp, Warning, TEXT("Removing asset from bundle with None ID, generating a new ID"));
+                        UE_LOG(LogTemp, Warning, TEXT("[CRITICAL] RemoveFromBundle: Bundle has None ID, generating a new ID"));
                         // Generate a new ID for the bundle
                         FGuid NewGuid = FGuid::NewGuid();
                         (*SelectedBundle)->BundleId = FName(*NewGuid.ToString());
                     }
                     
+                    // Verify the asset is actually in the bundle
+                    if (!(*SelectedBundle)->ContainsAsset(AssetId))
+                    {
+                        UE_LOG(LogTemp, Error, TEXT("[CRITICAL] RemoveFromBundle: Asset %s is not in bundle %s!"), 
+                            *AssetId.ToString(), *(*SelectedBundle)->BundleId.ToString());
+                            
+                        FMessageDialog::Open(EAppMsgType::Ok, 
+                            FText::Format(LOCTEXT("AssetNotInBundle", "Asset '{0}' is not in the selected bundle."), 
+                            FText::FromName(AssetId)));
+                            
+                        return FReply::Handled();
+                    }
+                    
+                    // CRITICAL FIX: Explicitly log the bundle contents before removal
+                    (*SelectedBundle)->DebugPrintContents(TEXT("BEFORE_ASSET_REMOVAL"));
+                    
                     // Remove the asset from the bundle (both ID and reference)
                     (*SelectedBundle)->RemoveAsset(AssetId);
                     
-                    // Also remove the asset reference if it's loaded
+                    // CRITICAL FIX: Also explicitly remove the asset reference if it's loaded
                     UCustomAssetBase* Asset = AssetManager.GetAssetById(AssetId);
                     if (Asset)
                     {
-                        (*SelectedBundle)->Assets.Remove(Asset);
+                        int32 RemovedCount = (*SelectedBundle)->Assets.Remove(Asset);
+                        UE_LOG(LogTemp, Warning, TEXT("[CRITICAL] RemoveFromBundle: Explicitly removed %d instances of asset from Assets array"), 
+                            RemovedCount);
                     }
+                    
+                    // Verify removal was successful
+                    if ((*SelectedBundle)->ContainsAsset(AssetId))
+                    {
+                        UE_LOG(LogTemp, Error, TEXT("[CRITICAL] RemoveFromBundle: Failed to remove asset %s from bundle %s!"), 
+                            *AssetId.ToString(), *(*SelectedBundle)->BundleId.ToString());
+                            
+                        FMessageDialog::Open(EAppMsgType::Ok, 
+                            FText::Format(LOCTEXT("FailedToRemoveAsset", "Failed to remove asset '{0}' from the bundle. Check logs."), 
+                            FText::FromName(AssetId)));
+                            
+                        return FReply::Handled();
+                    }
+                    
+                    // Log the bundle contents after removal
+                    (*SelectedBundle)->DebugPrintContents(TEXT("AFTER_ASSET_REMOVAL"));
                     
                     try
                     {

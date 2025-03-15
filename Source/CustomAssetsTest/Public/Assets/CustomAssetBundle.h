@@ -24,10 +24,6 @@ public:
     UPROPERTY(EditAnywhere, BlueprintReadOnly, Category = "Bundle")
     FText DisplayName;
 
-    // Bundle name - deprecated, use DisplayName instead
-    UPROPERTY(EditAnywhere, BlueprintReadOnly, Category = "Bundle")
-    FText BundleName;
-
     // Bundle description
     UPROPERTY(EditAnywhere, BlueprintReadOnly, Category = "Bundle", meta = (MultiLine = true))
     FText Description;

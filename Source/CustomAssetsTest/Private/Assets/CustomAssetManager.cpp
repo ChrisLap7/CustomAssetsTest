@@ -471,56 +471,83 @@ void UCustomAssetManager::RegisterBundle(UCustomAssetBundle* Bundle)
         UE_LOG(LogTemp, Warning, TEXT("[CRITICAL] RegisterBundle: Cannot register null bundle"));
         return;
     }
-
-    // Generate a GUID if the bundle doesn't have one
+    
+    // Make sure the bundle has a valid ID
     if (Bundle->BundleId.IsNone())
     {
+        // Generate a new unique ID for the bundle
         FGuid NewGuid = FGuid::NewGuid();
         Bundle->BundleId = FName(*NewGuid.ToString());
         UE_LOG(LogTemp, Warning, TEXT("[CRITICAL] RegisterBundle: Generated new GUID %s for bundle"), *Bundle->BundleId.ToString());
     }
     
-    // Check if bundle already exists
-    if (Bundles.Contains(Bundle->BundleId))
+    // CRITICAL FIX: Ensure new bundles have empty asset arrays
+    if (Bundle->AssetIds.Num() > 0)
     {
-        UE_LOG(LogTemp, Warning, TEXT("[CRITICAL] RegisterBundle: Bundle with ID %s already exists - updating existing bundle"), *Bundle->BundleId.ToString());
-        
-        // Get the existing bundle
-        UCustomAssetBundle* ExistingBundle = Bundles[Bundle->BundleId];
-        
-        // Check if this is a completely different bundle (safety check)
-        if (ExistingBundle != Bundle)
+        // Check if this is a newly created bundle or one loaded from disk
+        bool bIsLikelyNewBundle = Bundle->GetOuter() == GetTransientPackage() || 
+                                 (Bundle->GetOuter() && Bundle->GetOuter()->GetName().Contains("Transient"));
+                                 
+        if (bIsLikelyNewBundle)
         {
-            UE_LOG(LogTemp, Warning, TEXT("[CRITICAL] RegisterBundle: Replacing different bundle instance with same ID"));
+            UE_LOG(LogTemp, Warning, TEXT("[CRITICAL] RegisterBundle: New bundle has %d assets already. Clearing to ensure empty start."),
+                Bundle->AssetIds.Num());
             
-            // Copy over any assets that might be in the existing bundle but not the new one
-            for (const FName& AssetId : ExistingBundle->AssetIds)
-            {
-                if (!Bundle->AssetIds.Contains(AssetId))
-                {
-                    UE_LOG(LogTemp, Warning, TEXT("[CRITICAL] RegisterBundle: Preserving asset ID %s from existing bundle"), *AssetId.ToString());
-                    Bundle->AssetIds.Add(AssetId);
-                }
-            }
-            
-            // Update the bundle
-            Bundles[Bundle->BundleId] = Bundle;
+            // Only clear arrays for brand new bundles to prevent data loss when loading from disk
+            Bundle->AssetIds.Empty();
+            Bundle->Assets.Empty();
         }
-        
-        return;
     }
     
-    // Log bundle contents for debugging
+    // Check if a bundle with this ID already exists
+    UCustomAssetBundle* ExistingBundle = GetBundleById(Bundle->BundleId);
+    if (ExistingBundle)
+    {
+        // If this is a completely different bundle instance with the same ID
+        if (ExistingBundle != Bundle)
+        {
+            UE_LOG(LogTemp, Warning, TEXT("[CRITICAL] RegisterBundle: Bundle with ID %s already exists - updating existing bundle"), *Bundle->BundleId.ToString());
+            
+            // For existing bundles, ensure we preserve existing properties but DON'T copy assets
+            // CRITICAL FIX: Don't copy assets from existing bundle to new bundle
+            
+            // Only copy important properties
+            Bundle->BundleId = ExistingBundle->BundleId;
+            Bundle->DisplayName = ExistingBundle->DisplayName;
+            Bundle->Description = ExistingBundle->Description;
+            Bundle->bPreloadAtStartup = ExistingBundle->bPreloadAtStartup;
+            Bundle->bKeepInMemory = ExistingBundle->bKeepInMemory;
+            Bundle->Priority = ExistingBundle->Priority;
+            Bundle->Tags = ExistingBundle->Tags;
+            
+            // DO NOT COPY ASSETS - this was causing unexpected asset inclusion
+            // Let the UI add assets explicitly
+            
+            // Replace the old bundle reference with the new one
+            UE_LOG(LogTemp, Warning, TEXT("[CRITICAL] RegisterBundle: Replacing different bundle instance with same ID"));
+            Bundles.Remove(Bundle->BundleId);
+            Bundles.Add(Bundle->BundleId, Bundle);
+        }
+        else
+        {
+            UE_LOG(LogTemp, Warning, TEXT("[CRITICAL] RegisterBundle: Bundle %s already registered"), *Bundle->BundleId.ToString());
+        }
+    }
+    else
+    {
+        // This is a new bundle, just add it to the map
+        Bundles.Add(Bundle->BundleId, Bundle);
+    }
+    
+    // Debug log bundle assets
     UE_LOG(LogTemp, Warning, TEXT("[CRITICAL] RegisterBundle: Bundle %s contains %d asset IDs:"), 
         *Bundle->BundleId.ToString(), Bundle->AssetIds.Num());
     
     for (const FName& AssetId : Bundle->AssetIds)
     {
-        UE_LOG(LogTemp, Warning, TEXT("      Asset ID: %s"), *AssetId.ToString());
+        UE_LOG(LogTemp, Warning, TEXT("[CRITICAL] RegisterBundle:     Asset ID: %s"), *AssetId.ToString());
     }
     
-    // Add to bundle map
-    Bundles.Add(Bundle->BundleId, Bundle);
     UE_LOG(LogTemp, Warning, TEXT("[CRITICAL] RegisterBundle: Successfully registered bundle %s"), *Bundle->BundleId.ToString());
 }
 
@@ -1355,56 +1382,48 @@ bool UCustomAssetManager::SaveBundle(UCustomAssetBundle* Bundle, const FString& 
 {
     if (!Bundle)
     {
-        UE_LOG(LogTemp, Error, TEXT("[CRITICAL] SaveBundle: Cannot save null bundle"));
+        UE_LOG(LogTemp, Error, TEXT("SaveBundle: Cannot save null bundle"));
         return false;
     }
     
-    // CRITICAL CHECK: Look for assets in the Bundle->Assets array that might not be in AssetIds
-    TArray<FName> MissingAssetIds;
+    // Check for assets in the Bundle->Assets array that might not be in AssetIds
     for (UCustomAssetBase* Asset : Bundle->Assets)
     {
         if (Asset && !Asset->AssetId.IsNone())
         {
             if (!Bundle->AssetIds.Contains(Asset->AssetId))
             {
-                UE_LOG(LogTemp, Warning, TEXT("[CRITICAL] SaveBundle: Found asset %s in Assets array but not in AssetIds array, adding it"), 
+                UE_LOG(LogTemp, Warning, TEXT("SaveBundle: Found asset %s in Assets array but not in AssetIds array, adding it"), 
                     *Asset->AssetId.ToString());
                 Bundle->AssetIds.Add(Asset->AssetId);
-                MissingAssetIds.Add(Asset->AssetId);
             }
         }
     }
     
-    // Log the initial bundle state for debugging
+    // Store the bundle ID and display name
     FName OriginalBundleId = Bundle->BundleId;
     FString OriginalDisplayName = Bundle->DisplayName.ToString();
-    UE_LOG(LogTemp, Warning, TEXT("[CRITICAL] SaveBundle: Starting save for bundle - ID: %s, Display Name: %s, Asset Count: %d"), 
-        *OriginalBundleId.ToString(), *OriginalDisplayName, Bundle->AssetIds.Num());
     
-    // Log each asset ID to be saved
-    UE_LOG(LogTemp, Warning, TEXT("[CRITICAL] SaveBundle: Assets in bundle before save:"));
-    for (const FName& AssetId : Bundle->AssetIds)
-    {
-        UE_LOG(LogTemp, Warning, TEXT("      Asset ID: %s"), *AssetId.ToString());
-    }
+    // Log the bundle state before saving
+    UE_LOG(LogTemp, Log, TEXT("SaveBundle: Saving bundle - ID: %s, Display Name: %s, Asset Count: %d"), 
+        *OriginalBundleId.ToString(), *OriginalDisplayName, Bundle->AssetIds.Num());
     
     // Make sure the bundle has a valid ID
     if (OriginalBundleId.IsNone())
     {
-        UE_LOG(LogTemp, Warning, TEXT("[CRITICAL] SaveBundle: Cannot save bundle with None ID, generating a new ID"));
         // Generate a new ID before saving
         FGuid NewGuid = FGuid::NewGuid();
         Bundle->BundleId = FName(*NewGuid.ToString());
         OriginalBundleId = Bundle->BundleId; // Update our cached ID
-        UE_LOG(LogTemp, Warning, TEXT("[CRITICAL] SaveBundle: Generated new ID: %s"), *OriginalBundleId.ToString());
+        UE_LOG(LogTemp, Log, TEXT("SaveBundle: Generated new ID: %s"), *OriginalBundleId.ToString());
     }
     
-    // Make sure the bundle has a valid display name - CRITICAL
+    // Make sure the bundle has a valid display name
     if (Bundle->DisplayName.IsEmpty())
     {
-        UE_LOG(LogTemp, Warning, TEXT("[CRITICAL] SaveBundle: Bundle has empty display name, using ID as display name"));
         Bundle->DisplayName = FText::FromString(OriginalDisplayName.IsEmpty() ? TEXT("New Bundle") : OriginalDisplayName);
         OriginalDisplayName = Bundle->DisplayName.ToString(); // Update our cached display name
+        UE_LOG(LogTemp, Log, TEXT("SaveBundle: Fixed empty display name with: %s"), *OriginalDisplayName);
     }
     
     // Store the original DisplayName explicitly to preserve it
@@ -1420,8 +1439,7 @@ bool UCustomAssetManager::SaveBundle(UCustomAssetBundle* Bundle, const FString& 
     FullPackagePath = FullPackagePath.Replace(TEXT("-"), TEXT("_"));
     BundleName = BundleName.Replace(TEXT("-"), TEXT("_"));
     
-    UE_LOG(LogTemp, Warning, TEXT("[CRITICAL] SaveBundle: Creating package at path: %s, preserving display name: %s"), 
-           *FullPackagePath, *PreservedDisplayName.ToString());
+    UE_LOG(LogTemp, Log, TEXT("SaveBundle: Creating package at path: %s"), *FullPackagePath);
     
     // Make sure the folder exists
     FString ContentDir = FPaths::ProjectContentDir();
@@ -1431,7 +1449,6 @@ bool UCustomAssetManager::SaveBundle(UCustomAssetBundle* Bundle, const FString& 
     
     if (!FPlatformFileManager::Get().GetPlatformFile().DirectoryExists(*FullBundleDir))
     {
-        UE_LOG(LogTemp, Warning, TEXT("[CRITICAL] SaveBundle: Creating directory %s"), *FullBundleDir);
         FPlatformFileManager::Get().GetPlatformFile().CreateDirectoryTree(*FullBundleDir);
     }
     
@@ -1439,53 +1456,26 @@ bool UCustomAssetManager::SaveBundle(UCustomAssetBundle* Bundle, const FString& 
     UPackage* Package = CreatePackage(*FullPackagePath);
     if (!Package)
     {
-        UE_LOG(LogTemp, Error, TEXT("[CRITICAL] SaveBundle: Failed to create package for bundle %s"), *OriginalBundleId.ToString());
+        UE_LOG(LogTemp, Error, TEXT("SaveBundle: Failed to create package for bundle %s"), *OriginalBundleId.ToString());
         return false;
     }
     
     Package->FullyLoad();
-    
+    // Store a local copy of the asset IDs for transfer
+    TArray<FName> OriginalAssetIds = Bundle->AssetIds;
+    int32 OriginalAssetCount = OriginalAssetIds.Num();
+
     // Create a new bundle asset in the package
     UCustomAssetBundle* SavedBundle = NewObject<UCustomAssetBundle>(Package, FName(*BundleName), RF_Public | RF_Standalone);
     if (!SavedBundle)
     {
-        UE_LOG(LogTemp, Error, TEXT("[CRITICAL] SaveBundle: Failed to create saved bundle object %s"), *OriginalBundleId.ToString());
+        UE_LOG(LogTemp, Error, TEXT("SaveBundle: Failed to create saved bundle object %s"), *OriginalBundleId.ToString());
         return false;
     }
     
-    // CRITICAL: Store a local copy of the asset IDs for verification
-    TArray<FName> OriginalAssetIds = Bundle->AssetIds;
-    int32 OriginalAssetCount = OriginalAssetIds.Num();
+
     
-    // If we have no assets, check if we're seeing any in the log
-    if (OriginalAssetCount == 0 && MissingAssetIds.Num() == 0)
-    {
-        // Last-ditch effort: check the logging to see if we're showing assets
-        UE_LOG(LogTemp, Warning, TEXT("[CRITICAL] SaveBundle: AssetIds array is empty! Checking log for potential assets to recover..."));
-        
-        // This is a hacky solution for recovery, not ideal but might help in this specific case
-        for (UObject* OuterObj = Bundle->GetOuter(); OuterObj != nullptr; OuterObj = OuterObj->GetOuter())
-        {
-            UE_LOG(LogTemp, Warning, TEXT("[CRITICAL] SaveBundle: Checking parent object %s for assets"), *OuterObj->GetName());
-            
-            // Try to check properties of the outer object for potential assets
-            for (TFieldIterator<FProperty> PropIt(OuterObj->GetClass()); PropIt; ++PropIt)
-            {
-                FProperty* Property = *PropIt;
-                if (Property->IsA<FArrayProperty>())
-                {
-                    FArrayProperty* ArrayProperty = CastField<FArrayProperty>(Property);
-                    if (ArrayProperty->Inner->IsA<FNameProperty>())
-                    {
-                        UE_LOG(LogTemp, Warning, TEXT("[CRITICAL] SaveBundle: Found a TArray<FName> property %s"), *Property->GetName());
-                        // We found a potential array of names, but we can't safely access it
-                    }
-                }
-            }
-        }
-    }
-    
-    UE_LOG(LogTemp, Warning, TEXT("[CRITICAL] SaveBundle: Original bundle has %d asset IDs that need to be transferred"), OriginalAssetCount);
+    UE_LOG(LogTemp, Log, TEXT("SaveBundle: Bundle has %d asset IDs to transfer"), OriginalAssetCount);
     
     // Copy the properties from the in-memory bundle to the saved bundle
     SavedBundle->BundleId = OriginalBundleId;
@@ -1496,39 +1486,26 @@ bool UCustomAssetManager::SaveBundle(UCustomAssetBundle* Bundle, const FString& 
     SavedBundle->Priority = Bundle->Priority;
     SavedBundle->Tags = Bundle->Tags;
     
-    // DIRECT COPY: Instead of creating a new empty array, directly copy the asset IDs
-    SavedBundle->AssetIds = OriginalAssetIds; // This is the critical fix - direct array copy
-    
-    // Verify the asset IDs were copied correctly
-    UE_LOG(LogTemp, Warning, TEXT("[CRITICAL] SaveBundle: After direct copy, SavedBundle has %d asset IDs"), SavedBundle->AssetIds.Num());
-    
-    if (SavedBundle->AssetIds.Num() != OriginalAssetCount)
+    // CRITICAL: Explicitly create a new array and add each asset ID individually
+    // This approach is more reliable than direct array assignment for serialization
+    SavedBundle->AssetIds.Empty(OriginalAssetCount);
+    for (const FName& AssetId : OriginalAssetIds)
     {
-        UE_LOG(LogTemp, Error, TEXT("[CRITICAL] SaveBundle: ASSET COUNT MISMATCH! Attempting fallback copy method..."));
-        
-        // Fallback: Manual copy each asset ID
-        SavedBundle->AssetIds.Empty(OriginalAssetCount);
-        for (const FName& AssetId : OriginalAssetIds)
+        if (!AssetId.IsNone())
         {
-            if (!AssetId.IsNone())
-            {
-                SavedBundle->AssetIds.Add(AssetId);
-                UE_LOG(LogTemp, Warning, TEXT("[CRITICAL] SaveBundle: Manually added asset ID %s to saved bundle"), *AssetId.ToString());
-            }
-        }
-        
-        // Add any missing assets we found earlier
-        for (const FName& AssetId : MissingAssetIds)
-        {
-            if (!SavedBundle->AssetIds.Contains(AssetId))
-            {
-                SavedBundle->AssetIds.Add(AssetId);
-                UE_LOG(LogTemp, Warning, TEXT("[CRITICAL] SaveBundle: Added recovered asset ID %s to saved bundle"), *AssetId.ToString());
-            }
+            SavedBundle->AssetIds.Add(AssetId);
+            UE_LOG(LogTemp, Verbose, TEXT("SaveBundle: Added asset ID %s to saved bundle"), *AssetId.ToString());
         }
     }
     
-    // Ensure we're preserving all loaded assets too
+    // Ensure the asset IDs were copied correctly
+    if (SavedBundle->AssetIds.Num() != OriginalAssetCount)
+    {
+        UE_LOG(LogTemp, Warning, TEXT("SaveBundle: Asset count mismatch! Original: %d, Saved: %d"), 
+            OriginalAssetCount, SavedBundle->AssetIds.Num());
+    }
+    
+    // Copy any loaded assets
     if (Bundle->Assets.Num() > 0)
     {
         SavedBundle->Assets.Empty(Bundle->Assets.Num());
@@ -1542,7 +1519,7 @@ bool UCustomAssetManager::SaveBundle(UCustomAssetBundle* Bundle, const FString& 
                 if (!SavedBundle->AssetIds.Contains(Asset->AssetId))
                 {
                     SavedBundle->AssetIds.Add(Asset->AssetId);
-                    UE_LOG(LogTemp, Warning, TEXT("[CRITICAL] SaveBundle: Added missing asset ID %s from loaded asset"), *Asset->AssetId.ToString());
+                    UE_LOG(LogTemp, Log, TEXT("SaveBundle: Added missing asset ID %s from loaded asset"), *Asset->AssetId.ToString());
                 }
             }
         }
@@ -1550,39 +1527,12 @@ bool UCustomAssetManager::SaveBundle(UCustomAssetBundle* Bundle, const FString& 
     
     SavedBundle->bIsLoaded = false; // Don't save loaded state
     
-    // Double check the bundle's contents before saving
-    UE_LOG(LogTemp, Warning, TEXT("[CRITICAL] SaveBundle: Bundle to be saved has %d asset IDs and %d loaded assets"), 
+    // Verify the bundle has the correct data
+    UE_LOG(LogTemp, Log, TEXT("SaveBundle: Bundle to be saved has %d asset IDs and %d loaded assets"), 
         SavedBundle->AssetIds.Num(), SavedBundle->Assets.Num());
     
-    // SUPER CRITICAL RECOVERY - ALWAYS add the asset seen in logs if we have no assets
-    if (SavedBundle->AssetIds.Num() == 0)
-    {
-        // First try FIRST_ITEM
-        FName RecoveredAssetId = FName("FIRST_ITEM");
-        UE_LOG(LogTemp, Error, TEXT("[CRITICAL] SaveBundle: EMERGENCY RECOVERY - Adding asset ID %s since bundle has no assets"), 
-            *RecoveredAssetId.ToString());
-        SavedBundle->AssetIds.Add(RecoveredAssetId);
-            
-        // If that doesn't exist, also try FIRST_CHARACTER as a fallback
-        FName FallbackAssetId = FName("FIRST_CHARACTER");
-        UE_LOG(LogTemp, Error, TEXT("[CRITICAL] SaveBundle: EMERGENCY RECOVERY - Also adding fallback asset ID %s"), 
-            *FallbackAssetId.ToString());
-        SavedBundle->AssetIds.Add(FallbackAssetId);
-    }
-    
-    // Validate the saved bundle before saving
-    if (SavedBundle->BundleId.IsNone())
-    {
-        UE_LOG(LogTemp, Error, TEXT("[CRITICAL] SaveBundle: Critical error - SavedBundle ID is None before saving! Restoring original ID"));
-        SavedBundle->BundleId = OriginalBundleId;
-    }
-    
-    // Double-check the display name is preserved
-    if (SavedBundle->DisplayName.IsEmpty())
-    {
-        UE_LOG(LogTemp, Error, TEXT("[CRITICAL] SaveBundle: Critical error - SavedBundle DisplayName is empty before saving! Restoring preserved name"));
-        SavedBundle->DisplayName = PreservedDisplayName;
-    }
+    // DO NOT ADD DEFAULT ASSETS - This was causing the issue with bundles auto-including assets
+    // We want empty bundles to remain empty
     
     // Mark the package as dirty
     Package->MarkPackageDirty();
@@ -1601,49 +1551,22 @@ bool UCustomAssetManager::SaveBundle(UCustomAssetBundle* Bundle, const FString& 
     
     if (bSuccess)
     {
-        UE_LOG(LogTemp, Warning, TEXT("[CRITICAL] SaveBundle: Successfully saved bundle %s to %s"), *SavedBundle->BundleId.ToString(), *FullPackagePath);
-        
-        // Verify the saved bundle has the correct asset IDs
-        UE_LOG(LogTemp, Warning, TEXT("[CRITICAL] SaveBundle: Verifying saved bundle contents"));
-        for (const FName& AssetId : SavedBundle->AssetIds)
-        {
-            UE_LOG(LogTemp, Warning, TEXT("      Saved Asset ID: %s"), *AssetId.ToString());
-        }
-        
-        // Validate the saved bundle ID again after saving
-        if (SavedBundle->BundleId.IsNone())
-        {
-            UE_LOG(LogTemp, Error, TEXT("[CRITICAL] SaveBundle: Critical error - SavedBundle ID is None after saving! Restoring original ID"));
-            SavedBundle->BundleId = OriginalBundleId;
-        }
+        UE_LOG(LogTemp, Log, TEXT("SaveBundle: Successfully saved bundle %s to %s"), 
+            *SavedBundle->BundleId.ToString(), *FullPackagePath);
         
         // Replace the in-memory bundle with the saved bundle in our map
-        // Check if the bundle exists in our map first
         if (Bundles.Contains(OriginalBundleId))
         {
-            UE_LOG(LogTemp, Warning, TEXT("[CRITICAL] SaveBundle: Updating existing bundle in Bundles map"));
             Bundles[OriginalBundleId] = SavedBundle;
         }
         else
         {
-            // If not in the map, add it
-            UE_LOG(LogTemp, Warning, TEXT("[CRITICAL] SaveBundle: Adding new bundle to Bundles map"));
             Bundles.Add(SavedBundle->BundleId, SavedBundle);
         }
-        
-        // Make sure we're not losing our display name after the save
-        if (SavedBundle->DisplayName.IsEmpty() && !PreservedDisplayName.IsEmpty())
-        {
-            UE_LOG(LogTemp, Warning, TEXT("[CRITICAL] SaveBundle: SavedBundle lost its display name, restoring from preserved name"));
-            SavedBundle->DisplayName = PreservedDisplayName;
-        }
-        
-        // Log how many assets were saved with the bundle
-        UE_LOG(LogTemp, Warning, TEXT("[CRITICAL] SaveBundle: Bundle saved with %d asset IDs"), SavedBundle->AssetIds.Num());
     }
     else
     {
-        UE_LOG(LogTemp, Error, TEXT("[CRITICAL] SaveBundle: Failed to save bundle %s to %s"), *OriginalBundleId.ToString(), *FullPackagePath);
+        UE_LOG(LogTemp, Error, TEXT("SaveBundle: Failed to save bundle %s to %s"), *OriginalBundleId.ToString(), *FullPackagePath);
     }
     
     return bSuccess;

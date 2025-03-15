@@ -7,6 +7,15 @@ UCustomAssetBundle::UCustomAssetBundle()
     Priority = 50;
     bPreloadAtStartup = false;
     bKeepInMemory = false;
+    
+    // CRITICAL FIX: Explicitly initialize the AssetIds array to ensure it starts empty
+    AssetIds.Empty();
+    Assets.Empty();
+    
+    // Mark that the bundle needs to be saved
+    bIsLoaded = false;
+    
+    UE_LOG(LogTemp, Warning, TEXT("UCustomAssetBundle::Constructor - Created new bundle with EMPTY asset arrays"));
 }
 
 void UCustomAssetBundle::AddAsset(const FName& AssetId)
@@ -21,20 +30,24 @@ void UCustomAssetBundle::AddAsset(const FName& AssetId)
     UE_LOG(LogTemp, Warning, TEXT("[CRITICAL] AddAsset: Adding asset ID %s to bundle %s (DisplayName: %s)"), 
         *AssetId.ToString(), *BundleId.ToString(), *DisplayName.ToString());
     
+    // CRITICAL FIX: Make sure AssetIds is directly accessed to ensure property is marked as modified for serialization
+    if (AssetIds.Num() == 0)
+    {
+        UE_LOG(LogTemp, Warning, TEXT("[CRITICAL] AddAsset: AssetIds array was empty, initializing it"));
+        // Explicitly modify the property (this helps with serialization)
+        AssetIds = TArray<FName>();
+    }
+    
     // Check if the asset ID is already in the bundle
     if (!AssetIds.Contains(AssetId))
     {
-        // CRITICAL FIX: Make sure AssetIds array is properly instantiated
-        if (AssetIds.Num() == 0)
-        {
-            UE_LOG(LogTemp, Warning, TEXT("[CRITICAL] AddAsset: AssetIds array was empty, initializing it"));
-            AssetIds = TArray<FName>();
-        }
-        
-        // Add the asset ID to the AssetIds array
+        // Add the asset ID to the AssetIds array - directly modify the property
         AssetIds.Add(AssetId);
         UE_LOG(LogTemp, Warning, TEXT("[CRITICAL] AddAsset: Added asset ID %s to bundle's AssetIds array, now contains %d assets"), 
             *AssetId.ToString(), AssetIds.Num());
+        
+        // CRITICAL: Mark the object as modified to ensure serialization
+        Modify();
         
         // Log all assets in the bundle for debugging
         UE_LOG(LogTemp, Warning, TEXT("[CRITICAL] AddAsset: Bundle now contains the following assets:"));
@@ -79,32 +92,79 @@ void UCustomAssetBundle::RemoveAsset(const FName& AssetId)
 {
     if (AssetId.IsNone())
     {
+        UE_LOG(LogTemp, Warning, TEXT("[CRITICAL] RemoveAsset: Cannot remove None asset ID from bundle %s"), 
+            *BundleId.ToString());
         return;
     }
     
     // Log the operation
-    UE_LOG(LogTemp, Log, TEXT("Removing asset ID %s from bundle %s (DisplayName: %s)"), 
+    UE_LOG(LogTemp, Warning, TEXT("[CRITICAL] RemoveAsset: Removing asset ID %s from bundle %s (DisplayName: %s)"), 
         *AssetId.ToString(), *BundleId.ToString(), *DisplayName.ToString());
     
-    // Remove from AssetIds array
-    bool bRemovedFromIds = AssetIds.Remove(AssetId) > 0;
+    // CRITICAL FIX: Mark the object as modified before making changes to ensure serialization
+    Modify();
+    
+    // Debug current state before removal
+    UE_LOG(LogTemp, Warning, TEXT("[CRITICAL] RemoveAsset: Before removal - AssetIds count: %d, Assets count: %d"), 
+        AssetIds.Num(), Assets.Num());
+    
+    // CRITICAL FIX: Verify the asset is actually in the bundle before removing
+    if (!AssetIds.Contains(AssetId))
+    {
+        UE_LOG(LogTemp, Warning, TEXT("[CRITICAL] RemoveAsset: Asset ID %s is not in this bundle's AssetIds array"), 
+            *AssetId.ToString());
+        
+        // Try to check if it might be in the Assets array instead
+        UCustomAssetManager& AssetManager = UCustomAssetManager::Get();
+        UCustomAssetBase* Asset = AssetManager.GetAssetById(AssetId);
+        if (Asset && Assets.Contains(Asset))
+        {
+            UE_LOG(LogTemp, Warning, TEXT("[CRITICAL] RemoveAsset: Asset %s found in Assets array but not in AssetIds, removing it"), 
+                *AssetId.ToString());
+            Assets.Remove(Asset);
+            // No need to continue since the asset ID wasn't in AssetIds
+            return;
+        }
+        
+        UE_LOG(LogTemp, Warning, TEXT("[CRITICAL] RemoveAsset: Asset ID %s not found in either AssetIds or Assets arrays"), 
+            *AssetId.ToString());
+        return;
+    }
+    
+    // Remove from AssetIds array with verification
+    int32 RemovedCount = AssetIds.Remove(AssetId);
+    
+    UE_LOG(LogTemp, Warning, TEXT("[CRITICAL] RemoveAsset: Removed %d instances of AssetId %s from AssetIds array"), 
+        RemovedCount, *AssetId.ToString());
     
     // Also remove from Assets array if it's loaded
     UCustomAssetManager& AssetManager = UCustomAssetManager::Get();
     UCustomAssetBase* Asset = AssetManager.GetAssetById(AssetId);
-    bool bRemovedFromAssets = false;
+    int32 RemovedAssetsCount = 0;
+    
     if (Asset)
     {
-        bRemovedFromAssets = Assets.Remove(Asset) > 0;
+        RemovedAssetsCount = Assets.Remove(Asset);
+        UE_LOG(LogTemp, Warning, TEXT("[CRITICAL] RemoveAsset: Removed %d instances of loaded Asset from Assets array"), 
+            RemovedAssetsCount);
     }
     
-    if (bRemovedFromIds || bRemovedFromAssets)
+    // Debug current state after removal
+    UE_LOG(LogTemp, Warning, TEXT("[CRITICAL] RemoveAsset: After removal - AssetIds count: %d, Assets count: %d"), 
+        AssetIds.Num(), Assets.Num());
+    
+    if (RemovedCount > 0 || RemovedAssetsCount > 0)
     {
-        UE_LOG(LogTemp, Log, TEXT("Successfully removed asset ID %s from bundle %s"), *AssetId.ToString(), *BundleId.ToString());
+        UE_LOG(LogTemp, Warning, TEXT("[CRITICAL] RemoveAsset: Successfully removed asset ID %s from bundle %s"), 
+            *AssetId.ToString(), *BundleId.ToString());
+            
+        // CRITICAL FIX: Save the bundle after removing assets
+        Save();
     }
     else
     {
-        UE_LOG(LogTemp, Warning, TEXT("Asset ID %s was not found in bundle %s"), *AssetId.ToString(), *BundleId.ToString());
+        UE_LOG(LogTemp, Warning, TEXT("[CRITICAL] RemoveAsset: Asset ID %s was not found in bundle %s or failed to remove"), 
+            *AssetId.ToString(), *BundleId.ToString());
     }
 }
 
