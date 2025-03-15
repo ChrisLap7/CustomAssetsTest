@@ -1327,41 +1327,52 @@ TSharedRef<ITableRow> SCustomAssetManagerEditorWindow::GenerateBundleRow(TShared
         + SHorizontalBox::Slot()
         .FillWidth(0.15f)
         .Padding(4, 0)
-        .HAlign(HAlign_Right)
         .VAlign(VAlign_Center)
         [
             SNew(SHorizontalBox)
             
-            // Load button
+            // Load/Unload Button
             + SHorizontalBox::Slot()
             .AutoWidth()
-            .Padding(FMargin(2, 0))
+            .Padding(2, 0)
             [
                 SNew(SButton)
                 .ButtonStyle(FAppStyle::Get(), "SimpleButton")
-                .Text(LOCTEXT("LoadButton", "Load"))
-                .ToolTipText(LOCTEXT("LoadTooltip", "Load all assets in this bundle"))
+                .Text(Item->Bundle->bIsLoaded ? LOCTEXT("UnloadButton", "Unload") : LOCTEXT("LoadButton", "Load"))
+                .ToolTipText(Item->Bundle->bIsLoaded ? 
+                    LOCTEXT("UnloadBundleTooltip", "Unload all assets in this bundle") : 
+                    LOCTEXT("LoadBundleTooltip", "Load all assets in this bundle"))
                 .OnClicked_Lambda([this, Item]() {
-                    UCustomAssetManager& AssetManager = UCustomAssetManager::Get();
-                    AssetManager.LoadBundle(Item->Bundle->BundleId);
-                    UE_LOG(LogTemp, Log, TEXT("Loading bundle %s"), *Item->Bundle->BundleId.ToString());
+                    this->SelectedBundleId = Item->Bundle->BundleId;
+                    if (Item->Bundle->bIsLoaded)
+                    {
+                        UCustomAssetManager& AssetManager = UCustomAssetManager::Get();
+                        AssetManager.UnloadBundle(Item->Bundle->BundleId);
+                        RefreshBundleList();
+                    }
+                    else
+                    {
+                        UCustomAssetManager& AssetManager = UCustomAssetManager::Get();
+                        AssetManager.LoadBundle(Item->Bundle->BundleId);
+                        RefreshBundleList();
+                    }
                     return FReply::Handled();
                 })
             ]
             
-            // Unload button
+            // Remove Assets Button
             + SHorizontalBox::Slot()
             .AutoWidth()
-            .Padding(FMargin(2, 0))
+            .Padding(2, 0)
             [
                 SNew(SButton)
                 .ButtonStyle(FAppStyle::Get(), "SimpleButton")
-                .Text(LOCTEXT("UnloadButton", "Unload"))
-                .ToolTipText(LOCTEXT("UnloadTooltip", "Unload all assets in this bundle"))
+                .Text(LOCTEXT("RemoveAssetsButton", "Remove"))
+                .ToolTipText(LOCTEXT("RemoveAssetsTooltip", "Remove assets from this bundle"))
+                .IsEnabled(Item->Bundle->AssetIds.Num() > 0)
                 .OnClicked_Lambda([this, Item]() {
-                    UCustomAssetManager& AssetManager = UCustomAssetManager::Get();
-                    AssetManager.UnloadBundle(Item->Bundle->BundleId);
-                    UE_LOG(LogTemp, Log, TEXT("Unloading bundle %s"), *Item->Bundle->BundleId.ToString());
+                    this->SelectedBundleId = Item->Bundle->BundleId;
+                    this->ShowRemoveAssetsFromSelectedBundleDialog();
                     return FReply::Handled();
                 })
             ]
@@ -1369,7 +1380,7 @@ TSharedRef<ITableRow> SCustomAssetManagerEditorWindow::GenerateBundleRow(TShared
             // Delete button
             + SHorizontalBox::Slot()
             .AutoWidth()
-            .Padding(FMargin(2, 0))
+            .Padding(2, 0)
             [
                 SNew(SButton)
                 .ButtonStyle(FAppStyle::Get(), "SimpleButton")
@@ -1719,6 +1730,40 @@ FReply SCustomAssetManagerEditorWindow::OnAddAssetToBundleClicked()
         return FReply::Handled();
     }
     
+    // Create a list of bundles
+    TArray<TSharedPtr<FBundleEntry>> BundleOptions;
+    for (UCustomAssetBundle* Bundle : AllBundles)
+    {
+        // Check if any of the selected assets are already in this bundle
+        bool bAssetAlreadyInBundle = false;
+        for (const FName& AssetId : SelectedAssetIds)
+        {
+            if (Bundle->ContainsAsset(AssetId))
+            {
+                bAssetAlreadyInBundle = true;
+                UE_LOG(LogTemp, Verbose, TEXT("Asset %s is already in bundle %s, skipping from options"),
+                    *AssetId.ToString(), *Bundle->BundleId.ToString());
+                break;
+            }
+        }
+        
+        // Only add the bundle to options if none of the selected assets are already in it
+        if (!bAssetAlreadyInBundle)
+        {
+            TSharedPtr<FBundleEntry> Entry = MakeShared<FBundleEntry>();
+            Entry->Bundle = Bundle;
+            BundleOptions.Add(Entry);
+        }
+    }
+    
+    // Check if we have any bundles available after filtering
+    if (BundleOptions.Num() == 0)
+    {
+        FMessageDialog::Open(EAppMsgType::Ok, LOCTEXT("NoAvailableBundles", 
+            "All selected assets are already in all existing bundles. Create a new bundle first."));
+        return FReply::Handled();
+    }
+    
     // Create a dialog to select a bundle
     TSharedRef<SWindow> DialogWindow = SNew(SWindow)
         .Title(LOCTEXT("SelectBundle", "Select Bundle"))
@@ -1728,15 +1773,6 @@ FReply SCustomAssetManagerEditorWindow::OnAddAssetToBundleClicked()
         
     // Track the selected bundle
     TSharedPtr<UCustomAssetBundle*> SelectedBundle = MakeShared<UCustomAssetBundle*>(nullptr);
-    
-    // Create a list of bundles
-    TArray<TSharedPtr<FBundleEntry>> BundleOptions;
-    for (UCustomAssetBundle* Bundle : AllBundles)
-    {
-        TSharedPtr<FBundleEntry> Entry = MakeShared<FBundleEntry>();
-        Entry->Bundle = Bundle;
-        BundleOptions.Add(Entry);
-    }
     
     // Create a list view for the bundles
     TSharedPtr<SListView<TSharedPtr<FBundleEntry>>> BundleSelectionListView;
@@ -2912,6 +2948,189 @@ void SCustomAssetManagerEditorWindow::ShowDeleteBundleDialog(UCustomAssetBundle*
             FMessageDialog::Open(EAppMsgType::Ok, LOCTEXT("FailedToDelete", "Failed to delete bundle."));
         }
     }
+}
+
+void SCustomAssetManagerEditorWindow::ShowRemoveAssetsFromSelectedBundleDialog()
+{
+    if (SelectedBundleId.IsNone())
+    {
+        FMessageDialog::Open(EAppMsgType::Ok, LOCTEXT("NoBundleSelected", "No bundle selected. Please select a bundle first."));
+        return;
+    }
+
+    // Get the asset manager
+    UCustomAssetManager& AssetManager = UCustomAssetManager::Get();
+    
+    // Get the selected bundle
+    UCustomAssetBundle* SelectedBundle = AssetManager.GetBundleById(SelectedBundleId);
+    if (!SelectedBundle)
+    {
+        FMessageDialog::Open(EAppMsgType::Ok, LOCTEXT("BundleNotFound", "Selected bundle not found."));
+        return;
+    }
+    
+    // Check if the bundle has any assets
+    if (SelectedBundle->AssetIds.Num() == 0)
+    {
+        FMessageDialog::Open(EAppMsgType::Ok, LOCTEXT("BundleEmpty", "This bundle does not contain any assets."));
+        return;
+    }
+    
+    // Create a dialog to show assets in the bundle
+    TSharedRef<SWindow> DialogWindow = SNew(SWindow)
+        .Title(FText::Format(LOCTEXT("RemoveAssetsFromBundleTitle", "Remove Assets from Bundle: {0}"), SelectedBundle->DisplayName))
+        .ClientSize(FVector2D(500, 400))
+        .SupportsMaximize(false)
+        .SupportsMinimize(false);
+        
+    // Create a list of assets in the bundle
+    TArray<TSharedPtr<FAssetListItem>> AssetOptions;
+    for (const FName& AssetId : SelectedBundle->AssetIds)
+    {
+        TSharedPtr<FAssetListItem> Item = MakeShared<FAssetListItem>();
+        Item->AssetId = AssetId;
+        
+        // Get display name for the asset (either from the loaded asset or from the ID)
+        UCustomAssetBase* Asset = AssetManager.GetAssetById(AssetId);
+        Item->DisplayName = Asset ? Asset->DisplayName : FText::FromName(AssetId);
+        
+        AssetOptions.Add(Item);
+    }
+    
+    // Create a list view for the assets with multi-selection
+    TSharedPtr<SListView<TSharedPtr<FAssetListItem>>> AssetSelectionListView;
+    
+    // Track the selected assets
+    TArray<TSharedPtr<FAssetListItem>> SelectedAssets;
+    
+    DialogWindow->SetContent(
+        SNew(SVerticalBox)
+        +SVerticalBox::Slot()
+        .AutoHeight()
+        .Padding(10)
+        [
+            SNew(STextBlock)
+            .Text(FText::Format(LOCTEXT("SelectAssetsToRemove", "Select assets to remove from bundle '{0}':"), SelectedBundle->DisplayName))
+        ]
+        +SVerticalBox::Slot()
+        .FillHeight(1.0f)
+        .Padding(10)
+        [
+            SAssignNew(AssetSelectionListView, SListView<TSharedPtr<FAssetListItem>>)
+            .ListItemsSource(&AssetOptions)
+            .SelectionMode(ESelectionMode::Multi)
+            .OnGenerateRow_Lambda([](TSharedPtr<FAssetListItem> Item, const TSharedRef<STableViewBase>& OwnerTable) {
+                return SNew(STableRow<TSharedPtr<FAssetListItem>>, OwnerTable)
+                [
+                    SNew(STextBlock)
+                    .Text(Item->DisplayName)
+                ];
+            })
+            .OnSelectionChanged_Lambda([&SelectedAssets](TSharedPtr<FAssetListItem> Item, ESelectInfo::Type SelectType) {
+                // Get all selected items from the list view
+                // Note: This will be handled in the remove button click handler
+            })
+        ]
+        +SVerticalBox::Slot()
+        .AutoHeight()
+        .Padding(10)
+        .HAlign(HAlign_Right)
+        [
+            SNew(SHorizontalBox)
+            +SHorizontalBox::Slot()
+            .AutoWidth()
+            .Padding(5, 0)
+            [
+                SNew(SButton)
+                .Text(LOCTEXT("RemoveButton", "Remove Selected"))
+                .OnClicked_Lambda([this, DialogWindow, AssetSelectionListView, SelectedBundle, &AssetManager]() {
+                    // Get the selected assets
+                    TArray<TSharedPtr<FAssetListItem>> SelectedItems = AssetSelectionListView->GetSelectedItems();
+                    
+                    if (SelectedItems.Num() == 0)
+                    {
+                        FMessageDialog::Open(EAppMsgType::Ok, LOCTEXT("NoAssetsSelected", "No assets selected for removal. Please select one or more assets."));
+                        return FReply::Handled();
+                    }
+                    
+                    // Confirm with the user
+                    FText Message = FText::Format(
+                        LOCTEXT("ConfirmAssetRemoval", "Are you sure you want to remove the selected {0} assets from bundle '{1}'?"),
+                        FText::AsNumber(SelectedItems.Num()),
+                        SelectedBundle->DisplayName
+                    );
+                    
+                    FText Title = LOCTEXT("ConfirmRemovalTitle", "Confirm Asset Removal");
+                    
+                    if (FMessageDialog::Open(EAppMsgType::YesNo, Message, &Title) == EAppReturnType::Yes)
+                    {
+                        // Remove all selected assets from the bundle
+                        int32 RemovedCount = 0;
+                        for (const TSharedPtr<FAssetListItem>& Item : SelectedItems)
+                        {
+                            // Skip invalid assets
+                            if (Item->AssetId.IsNone())
+                            {
+                                continue;
+                            }
+                            
+                            UE_LOG(LogTemp, Log, TEXT("Removing asset %s from bundle %s"), 
+                                *Item->AssetId.ToString(), *SelectedBundle->BundleId.ToString());
+                                
+                            // Remove the asset from the bundle
+                            SelectedBundle->RemoveAsset(Item->AssetId);
+                            RemovedCount++;
+                        }
+                        
+                        // Save the bundle
+                        try
+                        {
+                            bool bSaved = SelectedBundle->Save();
+                            
+                            if (!bSaved)
+                            {
+                                UE_LOG(LogTemp, Error, TEXT("Failed to save bundle %s after removing assets"), *SelectedBundle->BundleId.ToString());
+                                FMessageDialog::Open(EAppMsgType::Ok, FText::Format(LOCTEXT("FailedToSaveBundle", 
+                                    "Failed to save bundle {0}. Check the logs for more information."), SelectedBundle->DisplayName));
+                            }
+                            
+                            // Refresh UI
+                            RefreshAssetList();
+                            RefreshBundleList();
+                            
+                            // Show success message
+                            FMessageDialog::Open(EAppMsgType::Ok, 
+                                FText::Format(LOCTEXT("AssetsRemovedFromBundle", "{0} assets removed from bundle '{1}'"), 
+                                FText::AsNumber(RemovedCount), 
+                                SelectedBundle->DisplayName));
+                        }
+                        catch (const std::exception& e)
+                        {
+                            UE_LOG(LogTemp, Error, TEXT("Exception when saving bundle after asset removal: %s"), UTF8_TO_TCHAR(e.what()));
+                            FMessageDialog::Open(EAppMsgType::Ok, FText::FromString(FString::Printf(TEXT("Error saving bundle: %s"), UTF8_TO_TCHAR(e.what()))));
+                        }
+                    }
+                    
+                    // Close the dialog
+                    FSlateApplication::Get().RequestDestroyWindow(DialogWindow);
+                    return FReply::Handled();
+                })
+            ]
+            +SHorizontalBox::Slot()
+            .AutoWidth()
+            .Padding(5, 0)
+            [
+                SNew(SButton)
+                .Text(LOCTEXT("CancelButton", "Cancel"))
+                .OnClicked_Lambda([DialogWindow]() {
+                    FSlateApplication::Get().RequestDestroyWindow(DialogWindow);
+                    return FReply::Handled();
+                })
+            ]
+        ]
+    );
+    
+    FSlateApplication::Get().AddModalWindow(DialogWindow, FGlobalTabmanager::Get()->GetRootWindow());
 }
 
 #undef LOCTEXT_NAMESPACE 

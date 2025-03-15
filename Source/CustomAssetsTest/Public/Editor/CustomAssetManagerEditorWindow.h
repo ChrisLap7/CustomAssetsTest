@@ -387,6 +387,9 @@ private:
     /** Shows a dialog to remove an asset from one of its bundles */
     void ShowRemoveFromBundleDialog(const FName& AssetId);
     
+    /** Shows a dialog to remove assets from the currently selected bundle */
+    void ShowRemoveAssetsFromSelectedBundleDialog();
+    
     /** Shows a dialog to rename a bundle */
     void ShowRenameBundleDialog(UCustomAssetBundle* Bundle);
 
