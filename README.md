@@ -1,6 +1,7 @@
 # Custom Asset Management System for Unreal Engine 5.4
 
 This project demonstrates a custom asset management system for Unreal Engine 5.4, implemented primarily in C++. The system allows for efficient loading, unloading, and tracking of custom asset types, with support for exporting asset data to CSV/Excel.
+This is a test project where I am using my own Asset Manager as base to enhance it with extra logic by the use of Cursor.
 
 ## Features
 
